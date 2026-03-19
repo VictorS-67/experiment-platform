@@ -1,0 +1,87 @@
+<script lang="ts">
+	let { data } = $props();
+
+	const statusColors: Record<string, string> = {
+		draft: 'bg-gray-100 text-gray-700',
+		active: 'bg-green-100 text-green-700',
+		paused: 'bg-yellow-100 text-yellow-700',
+		archived: 'bg-red-100 text-red-700'
+	};
+
+	function getTitle(title: Record<string, string>): string {
+		return title?.en || title?.ja || Object.values(title || {})[0] || 'Untitled';
+	}
+
+	function formatDate(dateStr: string): string {
+		return new Date(dateStr).toLocaleDateString('en-US', {
+			year: 'numeric',
+			month: 'short',
+			day: 'numeric'
+		});
+	}
+</script>
+
+<svelte:head>
+	<title>Experiments - Admin</title>
+</svelte:head>
+
+<div class="p-8">
+	<div class="flex items-center justify-between mb-6">
+		<h1 class="text-2xl font-semibold text-gray-800">Experiments</h1>
+		<a
+			href="/admin/experiments/new"
+			class="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700 transition-colors text-sm font-medium"
+		>
+			New Experiment
+		</a>
+	</div>
+
+	{#if data.experiments.length === 0}
+		<div class="text-center py-16 text-gray-500">
+			<p class="text-lg mb-2">No experiments yet</p>
+			<p class="text-sm">Create your first experiment to get started.</p>
+		</div>
+	{:else}
+		<div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+			<table class="w-full text-sm">
+				<thead class="bg-gray-50 border-b border-gray-200">
+					<tr>
+						<th class="text-left px-4 py-3 font-medium text-gray-600">Name</th>
+						<th class="text-left px-4 py-3 font-medium text-gray-600">Slug</th>
+						<th class="text-left px-4 py-3 font-medium text-gray-600">Status</th>
+						<th class="text-left px-4 py-3 font-medium text-gray-600">Participants</th>
+						<th class="text-left px-4 py-3 font-medium text-gray-600">Created</th>
+						<th class="text-right px-4 py-3 font-medium text-gray-600">Actions</th>
+					</tr>
+				</thead>
+				<tbody class="divide-y divide-gray-100">
+					{#each data.experiments as exp}
+						<tr class="hover:bg-gray-50">
+							<td class="px-4 py-3 font-medium text-gray-800">
+								{getTitle(exp.title)}
+							</td>
+							<td class="px-4 py-3 text-gray-500">
+								<code class="bg-gray-100 px-1.5 py-0.5 rounded text-xs">{exp.slug}</code>
+							</td>
+							<td class="px-4 py-3">
+								<span class="px-2 py-0.5 rounded-full text-xs font-medium {statusColors[exp.status] || 'bg-gray-100 text-gray-700'}">
+									{exp.status}
+								</span>
+							</td>
+							<td class="px-4 py-3 text-gray-600">{exp.participantCount}</td>
+							<td class="px-4 py-3 text-gray-500">{formatDate(exp.createdAt)}</td>
+							<td class="px-4 py-3 text-right space-x-2">
+								<a href="/admin/experiments/{exp.id}" class="text-indigo-600 hover:text-indigo-800 text-xs font-medium">
+									Edit
+								</a>
+								<a href="/admin/experiments/{exp.id}/data" class="text-gray-500 hover:text-gray-700 text-xs font-medium">
+									Data
+								</a>
+							</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
+	{/if}
+</div>

@@ -1,0 +1,93 @@
+{
+	"common": {
+		"loading": "読み込み中...",
+		"save": "保存",
+		"saving": "保存中...",
+		"cancel": "キャンセル",
+		"next": "次へ",
+		"previous": "戻る",
+		"submit": "送信",
+		"logout": "ログアウト",
+		"close": "閉じる",
+		"yes": "はい",
+		"no": "いいえ",
+		"error": "エラー",
+		"success": "成功",
+		"warning": "警告",
+		"optional": "任意",
+		"saved_responses": "保存済みの回答：",
+		"registering_as": "登録中：",
+		"registering": "登録中..."
+	},
+	"registration": {
+		"email_label": "メールアドレス",
+		"email_placeholder": "メールアドレスを入力してください",
+		"submit_email": "次へ",
+		"welcome_back": "おかえりなさい！",
+		"new_participant": "ようこそ！以下の情報を入力してください。",
+		"register": "登録",
+		"error_invalid_email": "有効なメールアドレスを入力してください。",
+		"error_email_required": "メールアドレスを入力してください。",
+		"error_not_loaded": "実験がまだ読み込まれていません。ページを更新してください。",
+		"error_config_not_loaded": "実験の設定が読み込まれていません。ページを更新してください。",
+		"error_registration_failed": "登録に失敗しました：{error}",
+		"error_generic": "エラーが発生しました：{error}",
+		"success_registered": "登録完了！",
+		"field_required": "「{field}」は必須です。",
+		"field_min_value": "{field}は{min}以上である必要があります。",
+		"field_max_value": "{field}は{max}以下である必要があります。"
+	},
+	"survey": {
+		"progress": "進捗",
+		"of": "/",
+		"completed": "完了",
+		"save_success": "回答が保存されました！",
+		"save_error": "保存に失敗しました。もう一度お試しください。",
+		"completion_title": "お疲れ様でした！",
+		"completion_body": "すべての刺激を完了しました。",
+		"next_phase": "次のフェーズへ",
+		"stay_on_page": "このページに留まる",
+		"continue": "続ける",
+		"no_response_saved": "この項目の回答は保存されていません。",
+		"fill_in_required": "入力してください：{field}"
+	},
+	"tutorial": {
+		"progress": "ステップ",
+		"of": "/",
+		"begin": "チュートリアルを開始",
+		"skip": "チュートリアルをスキップ",
+		"next": "次へ",
+		"previous": "戻る",
+		"finish": "チュートリアル完了"
+	},
+	"review": {
+		"source_response": "あなたの元の回答：",
+		"no_items": "レビューする項目がありません。前のフェーズを先に完了してください。",
+		"item_label": "回答 {index}",
+		"replay": "再生"
+	},
+	"validation": {
+		"required": "この項目は必須です。",
+		"min_length": "{min}文字以上入力してください。",
+		"max_length": "{max}文字以下で入力してください。",
+		"min_value": "{min}以上の値を入力してください。",
+		"max_value": "{max}以下の値を入力してください。",
+		"invalid_format": "形式が正しくありません。"
+	},
+	"audio": {
+		"start_recording": "録音開始",
+		"stop": "停止",
+		"recording": "録音中...",
+		"delete_rerecord": "削除して再録音",
+		"try_again": "もう一度試す",
+		"error_permission": "マイクのアクセスが拒否されました。マイクへのアクセスを許可してもう一度お試しください。",
+		"error_no_device": "マイクにアクセスできませんでした。デバイスの設定を確認してください。",
+		"error_not_supported": "このブラウザでは音声録音がサポートされていません。",
+		"error_too_large": "録音が大きすぎます。"
+	},
+	"timestamps": {
+		"start": "開始時間を取得",
+		"end": "終了時間を取得",
+		"not_set": "-.--"
+	}
+}

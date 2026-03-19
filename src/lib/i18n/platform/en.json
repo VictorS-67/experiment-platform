@@ -1,0 +1,93 @@
+{
+	"common": {
+		"loading": "Loading...",
+		"save": "Save",
+		"saving": "Saving...",
+		"cancel": "Cancel",
+		"next": "Next",
+		"previous": "Previous",
+		"submit": "Submit",
+		"logout": "Logout",
+		"close": "Close",
+		"yes": "Yes",
+		"no": "No",
+		"error": "Error",
+		"success": "Success",
+		"warning": "Warning",
+		"optional": "optional",
+		"saved_responses": "Saved responses:",
+		"registering_as": "Registering as:",
+		"registering": "Registering..."
+	},
+	"registration": {
+		"email_label": "Email address",
+		"email_placeholder": "Enter your email",
+		"submit_email": "Next",
+		"welcome_back": "Welcome back!",
+		"new_participant": "Welcome! Please fill in your information below.",
+		"register": "Register",
+		"error_invalid_email": "Please enter a valid email address.",
+		"error_email_required": "Please enter your email address.",
+		"error_not_loaded": "Experiment not loaded yet. Please refresh the page.",
+		"error_config_not_loaded": "Experiment config not loaded. Please refresh.",
+		"error_registration_failed": "Registration failed: {error}",
+		"error_generic": "Something went wrong: {error}",
+		"success_registered": "Registration successful!",
+		"field_required": "\"{field}\" is required.",
+		"field_min_value": "{field} must be at least {min}.",
+		"field_max_value": "{field} must be at most {max}."
+	},
+	"survey": {
+		"progress": "Progress",
+		"of": "of",
+		"completed": "completed",
+		"save_success": "Response saved!",
+		"save_error": "Failed to save. Please try again.",
+		"completion_title": "Congratulations!",
+		"completion_body": "You have completed all stimuli.",
+		"next_phase": "Continue to Next Phase",
+		"stay_on_page": "Stay on Page",
+		"continue": "Continue",
+		"no_response_saved": "No response saved for this item.",
+		"fill_in_required": "Please fill in: {field}"
+	},
+	"tutorial": {
+		"progress": "Step",
+		"of": "of",
+		"begin": "Begin Tutorial",
+		"skip": "Skip Tutorial",
+		"next": "Next",
+		"previous": "Back",
+		"finish": "Finish Tutorial"
+	},
+	"review": {
+		"source_response": "Your original response:",
+		"no_items": "No items to review. Complete the previous phase first.",
+		"item_label": "Response {index}",
+		"replay": "Replay"
+	},
+	"validation": {
+		"required": "This field is required.",
+		"min_length": "Must be at least {min} characters.",
+		"max_length": "Must be at most {max} characters.",
+		"min_value": "Must be at least {min}.",
+		"max_value": "Must be at most {max}.",
+		"invalid_format": "Invalid format."
+	},
+	"audio": {
+		"start_recording": "Start recording",
+		"stop": "Stop",
+		"recording": "Recording...",
+		"delete_rerecord": "Delete and re-record",
+		"try_again": "Try again",
+		"error_permission": "Microphone access denied. Please allow microphone access and try again.",
+		"error_no_device": "Could not access microphone. Please check your device settings.",
+		"error_not_supported": "Audio recording is not supported in this browser.",
+		"error_too_large": "Recording is too large."
+	},
+	"timestamps": {
+		"start": "Get starting time",
+		"end": "Get ending time",
+		"not_set": "-.--"
+	}
+}

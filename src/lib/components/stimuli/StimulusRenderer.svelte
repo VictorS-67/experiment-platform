@@ -1,0 +1,50 @@
+<script lang="ts">
+	import type { StimulusItemType, StimuliConfigType } from '$lib/config/schema';
+	import { PUBLIC_SUPABASE_URL } from '$env/static/public';
+	import { i18n } from '$lib/i18n/index.svelte';
+	import VideoPlayer from './VideoPlayer.svelte';
+
+	let {
+		item,
+		config,
+		mediaElement = $bindable(undefined)
+	}: {
+		item: StimulusItemType;
+		config: StimuliConfigType;
+		mediaElement?: HTMLMediaElement | undefined;
+	} = $props();
+
+	let stimulusType = $derived(item.type ?? config.type);
+
+	function resolveUrl(item: StimulusItemType): string {
+		if (item.url) return item.url;
+		if (item.filename && config.storagePath) {
+			return `${PUBLIC_SUPABASE_URL}/storage/v1/object/public/${config.storagePath}${item.filename}`;
+		}
+		return item.filename ?? '';
+	}
+</script>
+
+{#if stimulusType === 'video'}
+	<VideoPlayer {item} {config} bind:mediaElement={mediaElement as HTMLVideoElement | undefined} />
+{:else if stimulusType === 'image'}
+	<div class="w-full rounded-lg overflow-hidden" id="stimulus-player">
+		<img src={resolveUrl(item)} alt={item.id} class="w-full" />
+	</div>
+{:else if stimulusType === 'audio'}
+	<div class="w-full rounded-lg p-4 bg-gray-50 border" id="stimulus-player">
+		<audio
+			bind:this={mediaElement}
+			src={resolveUrl(item)}
+			controls
+			class="w-full"
+		>
+		</audio>
+	</div>
+{:else if stimulusType === 'text'}
+	<div class="w-full rounded-lg p-6 bg-gray-50 border" id="stimulus-player">
+		<p class="text-lg">{i18n.localized(item.label, item.id)}</p>
+	</div>
+{:else}
+	<p class="text-gray-400">Unknown stimulus type: {stimulusType}</p>
+{/if}
