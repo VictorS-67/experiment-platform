@@ -8,6 +8,8 @@
 	import Header from '$lib/components/layout/Header.svelte';
 	import RegistrationForm from '$lib/components/registration/RegistrationForm.svelte';
 
+	let { data } = $props();
+
 	let config = $derived(experiment.config);
 	let slug = $derived($page.params.slug);
 
@@ -133,7 +135,7 @@
 </script>
 
 <svelte:head>
-	<title>{config ? i18n.localized(config.metadata.title, 'Experiment') : i18n.platform('common.loading')}</title>
+	<title>{data.experiment ? i18n.localized(data.experiment.config.metadata.title, 'Experiment') : (config ? i18n.localized(config.metadata.title, 'Experiment') : 'Experiment')}</title>
 	<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
 </svelte:head>
 

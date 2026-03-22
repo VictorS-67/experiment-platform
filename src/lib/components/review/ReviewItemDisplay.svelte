@@ -8,33 +8,42 @@
 		sourceResponse,
 		stimuliConfig,
 		stimulusItem,
+		replayMode = 'segment',
 		mediaElement = $bindable(undefined)
 	}: {
 		sourceResponse: ResponseRecord;
 		stimuliConfig: StimuliConfigType;
 		stimulusItem: StimulusItemType | undefined;
+		replayMode?: 'segment' | 'full-highlight';
 		mediaElement?: HTMLMediaElement | undefined;
 	} = $props();
 
+	let highlightActive = $state(false);
+	let activeTimeUpdateListener: (() => void) | null = null;
+
+	function clearActiveListener() {
+		if (activeTimeUpdateListener && mediaElement) {
+			mediaElement.removeEventListener('timeupdate', activeTimeUpdateListener);
+			activeTimeUpdateListener = null;
+		}
+	}
+
+	// Parse response data into timestamps (values matching "number-number") and regular key-values
 	let parsed = $derived.by(() => {
 		const data = sourceResponse.response_data;
-		const pairedKeys = new Set<string>();
 		const timestamps: { widgetId: string; start: number; end: number }[] = [];
-		for (const [key, val] of Object.entries(data)) {
-			if (key.endsWith('_start') && val !== null && val !== 'null') {
-				const widgetId = key.slice(0, -6);
-				const endVal = data[`${widgetId}_end`];
-				if (endVal !== null && endVal !== 'null' && endVal !== undefined) {
-					timestamps.push({ widgetId, start: parseFloat(val as string), end: parseFloat(endVal as string) });
-					pairedKeys.add(key);
-					pairedKeys.add(`${widgetId}_end`);
-				}
-			}
-		}
+		const timestampKeys = new Set<string>();
 		const regular: { key: string; val: unknown }[] = [];
+
 		for (const [key, val] of Object.entries(data)) {
 			if (key === '_timestamp' || val === null || val === 'null') continue;
-			if (!pairedKeys.has(key)) regular.push({ key, val });
+			if (typeof val === 'string' && /^\d+(\.\d+)?-\d+(\.\d+)?$/.test(val)) {
+				const [s, e] = val.split('-');
+				timestamps.push({ widgetId: key, start: parseFloat(s), end: parseFloat(e) });
+				timestampKeys.add(key);
+			} else {
+				regular.push({ key, val });
+			}
 		}
 		return { timestamps, regular };
 	});
@@ -47,20 +56,51 @@
 
 	function replaySegment(start: number, end: number) {
 		if (!mediaElement) return;
+		clearActiveListener();
 		mediaElement.currentTime = start;
 		mediaElement.play();
 		function onTimeUpdate() {
 			if (mediaElement && mediaElement.currentTime >= end) {
 				mediaElement.pause();
-				mediaElement.removeEventListener('timeupdate', onTimeUpdate);
+				clearActiveListener();
 			}
 		}
+		activeTimeUpdateListener = onTimeUpdate;
 		mediaElement.addEventListener('timeupdate', onTimeUpdate);
+	}
+
+	function replayFullWithHighlight(start: number, end: number) {
+		if (!mediaElement) return;
+		clearActiveListener();
+		highlightActive = false;
+		mediaElement.currentTime = 0;
+		mediaElement.play();
+		function onTimeUpdate() {
+			if (!mediaElement) return;
+			const t = mediaElement.currentTime;
+			highlightActive = t >= start && t <= end;
+			if (mediaElement.ended) {
+				highlightActive = false;
+				clearActiveListener();
+			}
+		}
+		activeTimeUpdateListener = onTimeUpdate;
+		mediaElement.addEventListener('timeupdate', onTimeUpdate);
+	}
+
+	function handleReplay(start: number, end: number) {
+		if (replayMode === 'full-highlight') {
+			replayFullWithHighlight(start, end);
+		} else {
+			replaySegment(start, end);
+		}
 	}
 </script>
 
 {#if stimulusItem}
-	<StimulusRenderer item={stimulusItem} config={stimuliConfig} bind:mediaElement />
+	<div class="rounded-lg transition-all duration-200" class:ring-4={highlightActive} class:ring-indigo-500={highlightActive}>
+		<StimulusRenderer item={stimulusItem} config={stimuliConfig} bind:mediaElement />
+	</div>
 {/if}
 
 <div class="mt-3 p-3 bg-blue-50 rounded border border-blue-200">
@@ -76,10 +116,10 @@
 			{#if mediaElement}
 				<button
 					type="button"
-					onclick={() => replaySegment(start, end)}
+					onclick={() => handleReplay(start, end)}
 					class="px-2 py-0.5 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700 cursor-pointer"
 				>
-					▶ {i18n.platform('review.replay')}
+					{i18n.platform('review.replay')}
 				</button>
 			{/if}
 		</div>

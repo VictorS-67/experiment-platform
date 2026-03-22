@@ -3,14 +3,7 @@ import { fail, redirect } from '@sveltejs/kit';
 import { createClient } from '@supabase/supabase-js';
 import { PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY } from '$env/static/public';
 import { getServerSupabase } from '$lib/server/supabase';
-import { dev } from '$app/environment';
-
-const COOKIE_OPTIONS = {
-	path: '/',
-	httpOnly: true,
-	sameSite: 'lax' as const,
-	secure: !dev
-};
+import { COOKIE_OPTIONS } from '$lib/server/cookies';
 
 export const actions: Actions = {
 	login: async ({ request, cookies }) => {

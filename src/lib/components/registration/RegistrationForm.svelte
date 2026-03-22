@@ -65,6 +65,18 @@
 					return false;
 				}
 			}
+			if (field.validation?.pattern && strVal(field.id)) {
+				try {
+					const regex = new RegExp(field.validation.pattern);
+					if (!regex.test(strVal(field.id))) {
+						const fieldName2 = i18n.localized(field.label, field.id);
+						error = i18n.localized(field.validation.errorMessage) || fieldName2 + ' does not match the required format.';
+						return false;
+					}
+				} catch {
+					// Invalid regex in config — skip pattern validation
+				}
+			}
 		}
 		error = '';
 		return true;

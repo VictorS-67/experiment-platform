@@ -3,16 +3,12 @@ import { PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY } from '$env/static/publi
 import { createClient } from '@supabase/supabase-js';
 import { getServerSupabase } from '$lib/server/supabase';
 import { isRedirect, isHttpError, redirect, error } from '@sveltejs/kit';
-import { dev } from '$app/environment';
-
-const COOKIE_OPTIONS = {
-	path: '/',
-	httpOnly: true,
-	sameSite: 'lax' as const,
-	secure: !dev
-};
+import { COOKIE_OPTIONS } from '$lib/server/cookies';
 
 // --- Rate limiting (in-memory sliding window) ---
+// NOTE: This rate limiter uses module-scope state and resets on every serverless cold start.
+// It provides best-effort protection on long-running Node processes only.
+// For production serverless deployments, replace with a Redis/Upstash-backed solution.
 
 const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
 const RATE_LIMITS: Record<string, number> = {
@@ -144,7 +140,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 				.from('admin_users')
 				.select('role')
 				.eq('user_id', verifiedUserId)
-				.single();
+				.maybeSingle();
 
 			if (!adminRow) {
 				event.cookies.delete('admin_access_token', { path: '/' });

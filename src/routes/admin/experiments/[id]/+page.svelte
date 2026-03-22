@@ -1,11 +1,12 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import ConfigEditor from '$lib/components/admin/ConfigEditor.svelte';
+	import Modal from '$lib/components/layout/Modal.svelte';
 	import type { ExperimentConfig } from '$lib/config/schema';
 
 	let { data, form } = $props();
 
-	type Tab = 'settings' | 'config';
+	type Tab = 'settings' | 'config' | 'versions';
 	type ConfigMode = 'form' | 'json';
 	let activeTab = $state<Tab>('settings');
 	let configMode = $state<ConfigMode>('form');
@@ -18,7 +19,10 @@
 	let saving = $state(false);
 	let statusUpdating = $state(false);
 	let showDeleteConfirm = $state(false);
+	let deleteConfirmText = $state('');
 	let deleting = $state(false);
+	let duplicating = $state(false);
+	let rollingBack = $state(false);
 
 	let toast = $state<{ type: 'success' | 'error'; message: string } | null>(null);
 
@@ -29,7 +33,19 @@
 
 	$effect(() => {
 		if (form?.success) {
-			showToast('success', form.statusUpdated ? 'Status updated.' : 'Config saved.');
+			if (form.statusUpdated) {
+				showToast('success', 'Status updated.');
+			} else if (form.rolledBack) {
+				showToast('success', 'Config restored. Reload the Config tab to see changes.');
+				// Re-sync after rollback
+				configState = structuredClone(data.experiment.config);
+				configJson = JSON.stringify(data.experiment.config, null, 2);
+			} else {
+				showToast('success', 'Config saved.');
+				// Re-sync configState from freshly loaded data (Zod may have added defaults during save)
+				configState = structuredClone(data.experiment.config);
+				configJson = JSON.stringify(data.experiment.config, null, 2);
+			}
 		} else if (form?.error) {
 			showToast('error', form.error);
 		}
@@ -120,12 +136,33 @@
 				</span>
 			</p>
 		</div>
-		<a
-			href="/admin/experiments/{data.experiment.id}/data"
-			class="text-sm px-4 py-2 border border-gray-300 rounded hover:bg-gray-50 transition-colors text-gray-700"
-		>
-			View Data
-		</a>
+		<div class="flex gap-2">
+			<form
+				method="POST"
+				action="?/duplicate"
+				use:enhance={() => {
+					duplicating = true;
+					return async ({ update }) => {
+						await update({ reset: false });
+						duplicating = false;
+					};
+				}}
+			>
+				<button
+					type="submit"
+					disabled={duplicating}
+					class="text-sm px-4 py-2 border border-gray-300 rounded hover:bg-gray-50 transition-colors text-gray-700 cursor-pointer disabled:opacity-50"
+				>
+					{duplicating ? 'Duplicating...' : 'Duplicate'}
+				</button>
+			</form>
+			<a
+				href="/admin/experiments/{data.experiment.id}/data"
+				class="text-sm px-4 py-2 border border-gray-300 rounded hover:bg-gray-50 transition-colors text-gray-700"
+			>
+				View Data
+			</a>
+		</div>
 	</div>
 
 	<!-- Toast -->
@@ -151,6 +188,13 @@
 				onclick={() => (activeTab = 'config')}
 			>
 				Config
+			</button>
+			<button
+				type="button"
+				class="pb-3 text-sm font-medium border-b-2 transition-colors cursor-pointer {activeTab === 'versions' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'}"
+				onclick={() => (activeTab = 'versions')}
+			>
+				Versions {#if data.versions.length > 0}<span class="ml-1 px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 text-xs">{data.versions.length}</span>{/if}
 			</button>
 		</nav>
 	</div>
@@ -224,52 +268,58 @@
 				<h2 class="text-lg font-medium text-red-700 mb-2">Danger Zone</h2>
 				<p class="text-sm text-gray-600 mb-4">Deleting an experiment removes it permanently along with all related data.</p>
 
-				{#if !showDeleteConfirm}
-					<button
-						type="button"
-						onclick={() => (showDeleteConfirm = true)}
-						class="text-sm px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition-colors cursor-pointer"
-					>
-						Delete Experiment
-					</button>
-				{:else}
-					<div class="p-4 bg-red-50 rounded border border-red-200">
-						<p class="text-sm text-red-700 mb-3 font-medium">Are you sure? This cannot be undone.</p>
-						<div class="flex gap-2">
-							<form
-								method="POST"
-								action="?/delete"
-								use:enhance={() => {
-									deleting = true;
-									return async ({ update }) => {
-										await update({ reset: false });
-										deleting = false;
-									};
-								}}
-							>
-								<button
-									type="submit"
-									disabled={deleting}
-									class="text-sm px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition-colors cursor-pointer disabled:opacity-50"
-								>
-									{deleting ? 'Deleting...' : 'Yes, delete'}
-								</button>
-							</form>
-							<button
-								type="button"
-								onclick={() => (showDeleteConfirm = false)}
-								class="text-sm px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition-colors cursor-pointer"
-							>
-								Cancel
-							</button>
-						</div>
-					</div>
-				{/if}
+				<button
+					type="button"
+					onclick={() => { showDeleteConfirm = true; deleteConfirmText = ''; }}
+					class="text-sm px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition-colors cursor-pointer"
+				>
+					Delete Experiment
+				</button>
 			</div>
+
+			<Modal
+				show={showDeleteConfirm}
+				title="Delete Experiment"
+				onclose={() => { showDeleteConfirm = false; deleteConfirmText = ''; }}
+			>
+				<p class="text-sm text-gray-700 mb-4">This will permanently delete the experiment and all its data. Type <strong>delete experiment</strong> to confirm.</p>
+				<input
+					type="text"
+					bind:value={deleteConfirmText}
+					placeholder="delete experiment"
+					class="w-full px-3 py-2 border border-gray-300 rounded text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-red-500"
+				/>
+				<form
+					method="POST"
+					action="?/delete"
+					use:enhance={() => {
+						deleting = true;
+						return async ({ update }) => { await update({ reset: false }); deleting = false; };
+					}}
+				>
+					<div class="flex gap-2 justify-end">
+						<button
+							type="button"
+							onclick={() => { showDeleteConfirm = false; deleteConfirmText = ''; }}
+							class="text-sm px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 cursor-pointer"
+						>Cancel</button>
+						<button
+							type="submit"
+							disabled={deleteConfirmText !== 'delete experiment' || deleting}
+							class="text-sm px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+						>{deleting ? 'Deleting...' : 'Delete Experiment'}</button>
+					</div>
+				</form>
+			</Modal>
 		</div>
 
 	<!-- Config Tab -->
 	{:else if activeTab === 'config'}
+		{#if data.experiment.status === 'active' && data.participantCount > 0}
+			<div class="mb-4 p-3 bg-amber-50 border border-amber-200 rounded text-sm text-amber-800">
+				⚠ This experiment has {data.participantCount} active participant{data.participantCount === 1 ? '' : 's'}. Changing stimulus IDs or widget IDs may cause existing response data to no longer match the config.
+			</div>
+		{/if}
 		<form
 			method="POST"
 			action="?/saveConfig"
@@ -327,7 +377,7 @@
 			{/if}
 
 			{#if configMode === 'form'}
-				<ConfigEditor config={configState} />
+				<ConfigEditor config={configState} experimentId={data.experiment.id} />
 			{:else}
 				<textarea
 					bind:value={configJson}
@@ -338,5 +388,55 @@
 				></textarea>
 			{/if}
 		</form>
+
+	<!-- Versions Tab -->
+	{:else if activeTab === 'versions'}
+		<div class="max-w-2xl">
+			{#if data.versions.length === 0}
+				<div class="text-center py-12 text-gray-500">
+					<p class="mb-1">No versions saved yet.</p>
+					<p class="text-sm">Versions are saved automatically each time you click "Save Config".</p>
+				</div>
+			{:else}
+				<div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+					<div class="px-4 py-3 bg-gray-50 border-b border-gray-200">
+						<p class="text-sm text-gray-600">{data.versions.length} version{data.versions.length === 1 ? '' : 's'} — newest first</p>
+					</div>
+					<table class="w-full text-sm">
+						<thead class="bg-gray-50 border-b border-gray-200">
+							<tr>
+								<th class="text-left px-4 py-3 font-medium text-gray-600">#</th>
+								<th class="text-left px-4 py-3 font-medium text-gray-600">Saved</th>
+								<th class="text-right px-4 py-3 font-medium text-gray-600">Action</th>
+							</tr>
+						</thead>
+						<tbody class="divide-y divide-gray-100">
+							{#each data.versions as v, i}
+								<tr class="hover:bg-gray-50">
+									<td class="px-4 py-3 text-gray-800 font-medium">v{v.version_number}</td>
+									<td class="px-4 py-3 text-gray-500">{new Date(v.created_at).toLocaleString()}</td>
+									<td class="px-4 py-3 text-right">
+										{#if i === 0}
+											<span class="text-xs text-gray-400">current</span>
+										{:else}
+											<form method="POST" action="?/rollback" use:enhance={() => {
+												rollingBack = true;
+												return async ({ update }) => { await update({ reset: false }); rollingBack = false; };
+											}}>
+												<input type="hidden" name="versionId" value={v.id} />
+												<button type="submit" disabled={rollingBack}
+													class="text-xs px-3 py-1 border border-gray-300 rounded hover:bg-gray-50 text-gray-700 cursor-pointer disabled:opacity-50">
+													{rollingBack ? '...' : 'Restore'}
+												</button>
+											</form>
+										{/if}
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{/if}
+		</div>
 	{/if}
 </div>

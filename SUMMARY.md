@@ -2,8 +2,9 @@
 
 > **Purpose**: This document is written for AI agents. It contains everything needed to understand, navigate, and continue development on this project without prior context.
 >
-> **Last updated**: 2026-03-19
+> **Last updated**: 2026-03-22
 > **Build status**: 0 type errors, production build succeeds (`npx svelte-check` passes, `npm run build` succeeds)
+> **Deployed**: Vercel (using `@sveltejs/adapter-vercel`)
 
 ---
 
@@ -138,6 +139,8 @@ response_flat   -- Joins responses + experiments + participants for CSV export
 | `003_tighten_rls.sql` | Drops permissive policies. INSERT requires valid active `experiment_id` (participants) and valid `participant_id` matching experiment (responses). Removes UPDATE on responses (append-only). SELECT remains `USING(true)` with note about auth.uid() limitation |
 | `004_session_security.sql` | Adds `session_token UUID DEFAULT gen_random_uuid()` NOT NULL UNIQUE to `participants`. Backfills existing rows |
 | `005_remove_anon_select.sql` | Drops anon SELECT on `participants`, `responses`, `file_uploads`. Only `experiments` remains anon-readable. All sensitive data reads are now server-side via service role key |
+| `006_fix_view_security.sql` | Recreates `response_flat` view with `security_invoker = true` (was implicitly SECURITY DEFINER, flagged by Supabase) |
+| `007_experiment_versions.sql` | Adds `experiment_config_versions` table for config history tracking (id, experiment_id FK, version_number INT, config JSONB, created_at) |
 
 ### Current Security Model Summary
 
@@ -222,14 +225,22 @@ ExperimentConfig
 | `text` | `<input type="text">` | — | `{widgetId}: "value"` |
 | `textarea` | `<textarea>` | `showCharCount`, `minLength`, `maxLength` | `{widgetId}: "value"` |
 | `select` | `<select>` dropdown | `options: [{ value, label }]` | `{widgetId}: "selectedValue"` |
-| `multiselect` | (schema defined, not rendered) | `options` | — |
+| `multiselect` | Toggle buttons, comma-separated | `options: [{ value, label }]` | `{widgetId}: "a,b,c"` |
 | `number` | `<input type="number">` | `min`, `max`, `step` | `{widgetId}: "value"` |
 | `likert` | Row of clickable number buttons | `min`, `max`, `minLabel`, `maxLabel` | `{widgetId}: "3"` |
-| `slider` | (schema defined, not rendered) | `min`, `max`, `step`, `minLabel`, `maxLabel` | — |
+| `slider` | `<input type="range">` with labels | `min`, `max`, `step`, `minLabel`, `maxLabel` | `{widgetId}: "value"` |
 | `timestamp-range` | Two buttons capturing `mediaElement.currentTime` | `captureStartLabel`, `captureEndLabel` | `{widgetId}_start: "1.23"`, `{widgetId}_end: "4.56"` |
 | `audio-recording` | MediaRecorder with record/stop/playback/delete | `maxDurationSeconds`, `maxFileSizeMB` | `{widgetId}: "storage/path.webm"` |
 
 **Timestamp-range storage detail**: The widget internally uses a comma-separated string `"start,end"` that gets split on save into two separate keys: `{widgetId}_start` and `{widgetId}_end`. On review, `ReviewItemDisplay` detects these pairs and shows a replay button.
+
+### Stimulus Naming Convention
+
+**For existing experiments** (`movement-onomatopoeia`, `movement-description`): Stimuli use numeric IDs (`"4"`) and filenames (`"4.mp4"`) because the original video names revealed information about the content (e.g., `JP_01_anger_1_M`). The mapping from numbered name → original name is stored in `previous_expe_data/{experiment}/_{experiment}_Names.csv`. The numeric IDs are permanent for these experiments because all response data references them as `stimulus_id`.
+
+**For all future experiments**: Use the original filename as both `id` and `filename` (e.g., `{ "id": "throwing_ball", "filename": "throwing_ball.mp4" }`). No renaming needed.
+
+**Storage layout**: Each experiment's videos are in a separate Supabase Storage folder: `stimuli/{experiment-slug}/`. So `stimuli/movement-onomatopoeia/4.mp4` and `stimuli/movement-description/4.mp4` are different files.
 
 ---
 
@@ -251,7 +262,7 @@ experiment-platform/
 │   ├── seed.js                           # Upsert config JSON into experiments table
 │   ├── upload-test-videos.js             # Upload first 3 videos to Supabase Storage
 │   └── upload-all-videos.js              # Upload all 144 videos with progress bar
-├── supabase/migrations/                  # 5 SQL migration files (see section 5)
+├── supabase/migrations/                  # 7 SQL migration files (see section 5)
 ├── src/
 │   ├── app.css                           # Tailwind import + custom styles (buttons, spinner, modal, message)
 │   ├── app.d.ts                          # App.Locals: { sessionToken: string|null, adminUser: {id,email,role}|null }
@@ -268,8 +279,9 @@ experiment-platform/
 │   │   │       └── ja.json               # Japanese translations (91 lines)
 │   │   ├── server/
 │   │   │   ├── supabase.ts              # Service role client singleton (getServerSupabase())
-│   │   │   ├── data.ts                  # Participant/response CRUD + file upload (141 lines)
-│   │   │   └── admin.ts                 # Admin CRUD + data export (151 lines)
+│   │   │   ├── cookies.ts               # Shared COOKIE_OPTIONS (httpOnly, sameSite lax, secure)
+│   │   │   ├── data.ts                  # Participant/response CRUD + file upload (142 lines)
+│   │   │   └── admin.ts                 # Admin CRUD + data export + versioning (313 lines)
 │   │   ├── services/
 │   │   │   ├── supabase.ts              # Anon client (browser-safe, used minimally)
 │   │   │   └── data.ts                  # Shared interfaces: ParticipantRecord, ResponseRecord
@@ -322,11 +334,15 @@ experiment-platform/
 │       │       └── [id]/
 │       │           ├── +page.server.ts        # saveConfig, updateStatus, delete actions (Zod validates on save)
 │       │           ├── +page.svelte           # Edit page: Settings tab + Config tab (Form/JSON toggle)
-│       │           └── data/
-│       │               ├── +page.server.ts    # getParticipants()
-│       │               ├── +page.svelte       # Participants table with response counts
-│       │               └── export/
-│       │                   └── +server.ts     # GET → CSV download from response_flat view
+│       │           ├── data/
+│       │           │   ├── +page.server.ts    # getParticipants() + getExperimentStats()
+│       │           │   ├── +page.svelte       # Participants table, stats panel, bulk delete, export
+│       │           │   └── export/
+│       │           │       └── +server.ts     # GET → CSV/JSON; style=raw|research, phase, dateFormat params
+│       │           └── participants/
+│       │               └── [participantId]/
+│       │                   ├── +page.server.ts  # getParticipantDetail() + reset/delete form actions
+│       │                   └── +page.svelte     # Registration data + responses by phase + CSV download
 │       └── e/[slug]/
 │           ├── +layout.server.ts              # Load experiment by slug (anon key), Zod validate
 │           ├── +layout.svelte                 # Set experiment stores from server data
@@ -407,11 +423,12 @@ A review phase (`type: 'review'`) references another phase via `reviewConfig.sou
 |-------|---------|
 | `/admin/login` | Supabase Auth email/password login |
 | `/admin` | Dashboard overview |
-| `/admin/experiments` | List all experiments with status badges and participant counts |
+| `/admin/experiments` | List all experiments with status badges, participant counts, duplicate button |
 | `/admin/experiments/new` | Create new experiment (slug + title + description → builds minimal valid config) |
-| `/admin/experiments/[id]` | Edit experiment — two tabs: Settings + Config |
-| `/admin/experiments/[id]/data` | Participants table with email, registration data, response counts |
-| `/admin/experiments/[id]/data/export` | GET → CSV download from `response_flat` view |
+| `/admin/experiments/[id]` | Edit experiment — two tabs: Settings + Config; config versioning panel |
+| `/admin/experiments/[id]/data` | Participants table, stats panel, bulk delete, export options |
+| `/admin/experiments/[id]/data/export` | GET → CSV or JSON download; `style=raw\|research`, `phase`, `dateFormat`, `includeRegistration` params |
+| `/admin/experiments/[id]/participants/[participantId]` | Individual participant: registration data, all responses by phase, reset/delete actions |
 
 ### Config Editor (`ConfigEditor.svelte`)
 
@@ -464,14 +481,26 @@ The form-based config editor (~620 lines) provides editable UI for the entire JS
 
 | Function | Purpose |
 |----------|---------|
-| `getAdminUser(userId)` | Verify user is in `admin_users` table |
 | `listExperiments()` | All experiments + participant counts per experiment |
 | `getExperiment(id)` | Single experiment by ID |
 | `createExperiment(slug, config)` | INSERT with status 'draft' |
 | `updateExperiment(id, { config?, status?, slug? })` | UPDATE selected fields + `updated_at` |
+| `duplicateExperiment(id)` | Deep-clone experiment config with new slug (`{slug}-copy`); does not copy participants |
 | `deleteExperiment(id)` | DELETE experiment (cascades to participants/responses) |
+| `saveConfigVersion(experimentId, config)` | INSERT into `experiment_config_versions` with auto-incremented version number |
+| `listConfigVersions(experimentId)` | List all versions (id, version_number, created_at) descending |
+| `rollbackToVersion(experimentId, versionId)` | Apply a past version's config + save a new version record |
 | `getParticipants(experimentId)` | Participants + response counts per participant |
-| `getResponseData(experimentId)` | All rows from `response_flat` view for CSV export |
+| `getParticipantDetail(participantId)` | Single participant + all responses grouped by phase_id |
+| `deleteParticipant(participantId)` | DELETE one participant (cascades to responses) |
+| `resetParticipantResponses(participantId)` | DELETE all responses for a participant (keeps registration) |
+| `deleteParticipants(participantIds[])` | Bulk DELETE participants |
+| `getExperimentStats(experimentId)` | Per-phase participant counts + per-stimulus response counts |
+| `getResponseData(experimentId)` | All rows from `response_flat` view, enriched with participant_id + registration_data |
+
+### `src/lib/server/cookies.ts` — Shared Cookie Config
+
+Exports `COOKIE_OPTIONS` (`path: '/'`, `httpOnly: true`, `sameSite: 'lax'`, `secure: !dev`). Imported by `hooks.server.ts`, `auth/+server.ts` (which extends it with `maxAge: 90 days`), and `admin/login/+page.server.ts`.
 
 ---
 
@@ -535,6 +564,36 @@ Content-Security-Policy:
 - Responses are **append-only** (no UPDATE RLS policy)
 - Each save creates a new row with incrementing `response_index`
 - CSV export sanitizes values against injection (leading `=`, `+`, `-`, `@`, `\t`, `\r`)
+
+### Rate Limiting (in `hooks.server.ts`)
+
+In-memory sliding window per client IP:
+- `/auth`: 20 requests/min
+- `/save`: 60 requests/min
+- `/upload`: 30 requests/min
+- Stale entries cleaned every 5 minutes. Returns 429 when exceeded.
+- ⚠️ **Serverless caveat**: Module-scope state resets on cold starts (Vercel). This rate limiter is effective only on long-running Node processes. A Redis/Upstash-backed solution is needed for stateless deployments.
+
+### CSRF Protection
+
+- SvelteKit form actions have built-in CSRF protection
+- API endpoints (`+server.ts`) verify `Origin` header matches app origin on POST/PUT/DELETE
+- Cross-origin requests are blocked with 403
+
+### Error Messages
+
+All `throw` calls in `src/lib/server/admin.ts` and `src/lib/server/data.ts` use generic messages (e.g., `"Failed to load participants"`) — raw Supabase/Postgres error details are logged server-side via `console.error()` and never surfaced to the browser.
+
+### Admin User Lookup
+
+`hooks.server.ts` uses `.maybeSingle()` (not `.single()`) when checking the `admin_users` table. This ensures a valid Supabase Auth user who is not in `admin_users` gets a clean redirect to `/admin/login` rather than a 500 error.
+
+### Environment Variable Validation
+
+`src/lib/server/supabase.ts` validates at module load:
+- `PUBLIC_SUPABASE_URL` must start with `https://`
+- `SUPABASE_SERVICE_ROLE_KEY` must be non-empty (length >= 20)
+- Throws a clear error message on misconfiguration (fail-fast)
 
 ---
 
@@ -646,38 +705,87 @@ In Svelte 5, `{@const}` must be an **immediate child** of `{#each}`, `{#if}`, `{
 4. **Review widgets not appearing**: ConfigEditor wrote widgets to `phase.responseWidgets` for all phase types. Fixed: type-aware `addWidget`/`removeWidget`/`widgetPath` functions that route to `reviewConfig.responseWidgets` for review phases.
 5. **Timestamp replay in review**: Added `ReviewItemDisplay` with `_start`/`_end` key pair detection, formatted time display, and replay button (seeks video, auto-pauses at end time).
 
+### Technical Debt Cleanup (2026-03-19)
+
+- **`response_flat` SECURITY DEFINER fix**: Migration 006 recreates view with `security_invoker = true`
+- **Legacy endpoints removed**: Deleted duplicate `src/routes/e/[slug]/survey/{save,upload}`
+- **Environment variable validation**: Fail-fast on invalid/missing Supabase config
+- **Rate limiting**: In-memory sliding window on `/auth`, `/save`, `/upload` endpoints
+- **CSRF origin checking**: All API POST endpoints verify `Origin` header
+
+### Phase 5: Production Readiness (2026-03-19)
+
+- **Deployed to Vercel**: Switched from `adapter-auto` to `@sveltejs/adapter-vercel`, deployed and verified working (reads/writes to Supabase confirmed)
+- **`slider` widget implemented**: `<input type="range">` with min/max/step, endpoint labels, live value display
+- **`multiselect` widget implemented**: Toggle buttons, comma-separated storage
+- **`random-per-participant` ordering**: Deterministic seeded shuffle using djb2 hash + mulberry32 PRNG + Fisher-Yates. Seed = `participantId + phaseId` for consistent cross-session ordering
+- **Data migration**: Participants and responses from two legacy Google Sheets experiments migrated into Supabase via `scripts/migrate-previous-data.js`. Audio recordings uploaded via `scripts/upload-previous-audio.js`.
+
+### Phase 6: Enhanced Admin Features (2026-03-22)
+
+- **Config editor completeness**: Tutorial editing, per-phase introduction/completion, widget config options (min/max/labels/charCount), stimuli management (add/remove/reorder), registration field validation — all exposed in form mode
+- **Experiment duplication**: "Duplicate" button creates `{slug}-copy` with deep-cloned config (including `config.slug` patched); status `draft`; no participants copied
+- **Participant management**: Individual detail pages (all responses + registration data), reset responses, delete, bulk delete
+- **Stats panel**: Per-phase participant started counts, stimulus response distribution bar chart
+- **Enhanced CSV export**: `style=research` merges phases side-by-side, expands `response_data` keys into individual columns, one row per (participant × stimulus × response_index). Also: JSON format, timestamp formatting, registration data columns, phase filter, per-participant download
+- **Config versioning**: Every save creates a version in `experiment_config_versions`; rollback to any past version; warning when editing config with active participants (migration 007)
+
+### Code + Security Audit (2026-03-22)
+
+- **`.env` verified clean**: Never committed to git; `.gitignore` correctly excludes `env*`
+- **DB errors sanitised**: All server functions use generic messages; raw Supabase errors logged server-side only
+- **`.single()` → `.maybeSingle()`**: Fixed in `hooks.server.ts` admin_users lookup — prevents 500 for non-admin Supabase users
+- **`COOKIE_OPTIONS` deduplicated**: Extracted to `src/lib/server/cookies.ts`; removed 3 identical definitions
+- **`getAdminUser()` removed**: Dead code; admin auth fully handled in `hooks.server.ts`
+- **`_timestamp` removed**: Client-side `_timestamp` in `response_data` was redundant with server-side `created_at`; removed from save paths
+- **Audio listener leak fixed**: `ReviewItemDisplay.svelte` — stacked `timeupdate` listeners on replay now cleared via `activeTimeUpdateListener` tracking
+- **Rate limiter serverless caveat documented**: Comment added in `hooks.server.ts`
+
 ---
 
 ## 15. What Is Left To Do
 
-### Phase 5: Deployment + Migration
-- **Deploy to Vercel**: Configure env vars, test production build, set up custom domain
-- **Migrate existing data**: Import data from original Google Sheets experiment into Supabase
-- **Test with real participants**: End-to-end testing at scale
-
 ### Known Gaps
-- **`slider` widget**: Defined in schema, no rendering in `WidgetRenderer.svelte`
-- **`multiselect` widget**: Same — schema only, no UI
-- **`random-per-participant` ordering**: In schema, but client only implements `sequential` and `random` (random re-randomizes on each page load, not per-participant)
-- **No test suite**: No unit, integration, or E2E tests exist
-- **No pagination**: Experiment list, participants list, CSV export all load everything at once
-- **Legacy endpoints**: `src/routes/e/[slug]/survey/{save,upload}` are duplicates of `[phaseSlug]` endpoints
-- **Config editor coverage**: Some config sections may not be fully exposed in Form mode (tutorial editing, per-phase introduction, stimuli drag-and-drop)
-- **a11y warnings**: Some labels not associated with controls in ConfigEditor (non-blocking)
+- **No test suite**: No unit, integration, or E2E tests exist (Phase 7)
+- **No pagination**: Experiment list, participants list, CSV export all load everything at once (Phase 10)
+- **a11y warnings**: Some labels not associated with controls in ConfigEditor (non-blocking, Phase 7)
+- **Serverless rate limiting**: In-memory rate limiter resets on cold starts; needs Redis/Upstash for Vercel
 
-### Potential Future Features
-- Experiment duplication (clone config with new slug)
-- Real-time participant monitoring dashboard
+### Potential Future Features (see `FUTUR_PLAN.md` for full roadmap)
 - Stimuli management UI (upload, reorder, preview, drag-and-drop)
 - More widget types (image annotation, ranking, matrix)
-- Experiment versioning (track config changes over time)
-- Bulk participant operations (delete, re-open completed phases)
-- inter-rater reliability calculations
+- Bulk participant operations (re-open completed phases)
+- Inter-rater reliability calculations
 - Multi-experiment aggregation views
+- Participant quotas and condition assignment
 
 ---
 
-## 16. Running the Project
+## 16. Previous Experiment Data (Pre-Migration)
+
+Data from two experiments run on the original vanilla JS platform, stored in `previous_expe_data/`:
+
+### `movement-to-onomatopoeia` → platform slug `movement-onomatopoeia`
+- **Participants**: 17 (IDs 0-16), `_Participants.csv` — columns: participantId, email, name, age, gender, movementPractice, nativeLanguage, signUpDate
+- **Responses**: 242 rows, `_Onomatopoeia.csv` — columns: participantId, participantName, video, onomatopoeia, startTime, endTime, answeredTimestamp, HasAudio, AudioFileName, reasoning, reasoningTimestamp
+  - 101 rows with empty onomatopoeia (gatekeeper "No"/skipped)
+  - 74 rows with reasoning (review phase data, stored in same sheet)
+  - 21 audio recordings in `previous_expe_data/audio/` (organized by participant folder)
+- **Name mapping**: `_Names.csv` — 144 rows mapping `new_name` (e.g., `4.mp4`) to `original_name` (e.g., `JP_01_contempt_1_M`)
+- **Config**: `configs/movement-onomatopoeia.json` (144 stimuli, 2 phases, gatekeeper, tutorial)
+
+### `mvt-description` → platform slug `movement-description`
+- **Participants**: 6 (IDs 0, 1, 3, 5, 7, 8 — sparse numbering), `_Participants.csv` — columns: participantId, email, name, age, gender, nativeLanguage, signUpDate (no movementPractice field)
+- **Responses**: 271 rows, `_Movements.csv` — columns: participantId, participantName, video, movement, startTime, endTime, answeredTimestamp, HasAudio, AudioFileName, emotion
+  - Multiple responses per (participant, video) — 42 cases — representing different movement segments with different timestamps
+  - All 271 rows have emotion filled in, 0 audio files
+- **Name mapping**: `_Names.csv` — 70 rows mapping `new_name` to `original_name` (e.g., `JP_06_anger_3_M`)
+- **Videos**: 70 files in Supabase Storage at `stimuli/movement-description/`
+- **Config**: Needs to be created (not yet in admin dashboard)
+
+---
+
+## 17. Running the Project
 
 ```bash
 cd /Users/victor/projects/experiment-platform
@@ -709,7 +817,7 @@ node scripts/upload-all-videos.js
 
 ---
 
-## 17. File Quick Reference
+## 18. File Quick Reference
 
 | What You Need | File |
 |---------------|------|

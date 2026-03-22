@@ -1,17 +1,5 @@
 import { getServerSupabase } from './supabase';
 
-export async function getAdminUser(userId: string) {
-	const supabase = getServerSupabase();
-	const { data, error } = await supabase
-		.from('admin_users')
-		.select('user_id, role')
-		.eq('user_id', userId)
-		.single();
-
-	if (error || !data) return null;
-	return data;
-}
-
 export async function listExperiments() {
 	const supabase = getServerSupabase();
 
@@ -20,7 +8,7 @@ export async function listExperiments() {
 		.select('id, slug, status, config, created_at, updated_at')
 		.order('created_at', { ascending: false });
 
-	if (error) throw new Error(`Failed to list experiments: ${error.message}`);
+	if (error) { console.error('Failed to list experiments:', error); throw new Error('Failed to list experiments'); }
 
 	// Get participant counts per experiment
 	const { data: counts } = await supabase
@@ -66,7 +54,7 @@ export async function createExperiment(slug: string, config: Record<string, unkn
 		.select('id')
 		.single();
 
-	if (error) throw new Error(`Failed to create experiment: ${error.message}`);
+	if (error) { console.error('Failed to create experiment:', error); throw new Error('Failed to create experiment'); }
 	return data;
 }
 
@@ -86,7 +74,26 @@ export async function updateExperiment(
 		.update(updateData)
 		.eq('id', id);
 
-	if (error) throw new Error(`Failed to update experiment: ${error.message}`);
+	if (error) { console.error('Failed to update experiment:', error); throw new Error('Failed to update experiment'); }
+}
+
+export async function duplicateExperiment(id: string) {
+	const supabase = getServerSupabase();
+	const source = await getExperiment(id);
+	if (!source) throw new Error('Experiment not found');
+
+	let newSlug = `${source.slug}-copy`;
+	let attempt = 1;
+	while (true) {
+		const { data } = await supabase.from('experiments').select('id').eq('slug', newSlug).maybeSingle();
+		if (!data) break;
+		attempt++;
+		newSlug = `${source.slug}-copy-${attempt}`;
+	}
+
+	const newConfig = structuredClone(source.config) as Record<string, unknown>;
+	newConfig.slug = newSlug;
+	return createExperiment(newSlug, newConfig);
 }
 
 export async function deleteExperiment(id: string) {
@@ -96,7 +103,54 @@ export async function deleteExperiment(id: string) {
 		.delete()
 		.eq('id', id);
 
-	if (error) throw new Error(`Failed to delete experiment: ${error.message}`);
+	if (error) { console.error('Failed to delete experiment:', error); throw new Error('Failed to delete experiment'); }
+}
+
+export async function saveConfigVersion(experimentId: string, config: unknown) {
+	const supabase = getServerSupabase();
+	// Get next version number
+	const { data } = await supabase
+		.from('experiment_config_versions')
+		.select('version_number')
+		.eq('experiment_id', experimentId)
+		.order('version_number', { ascending: false })
+		.limit(1)
+		.maybeSingle();
+
+	const nextVersion = (data?.version_number ?? 0) + 1;
+
+	const { error } = await supabase
+		.from('experiment_config_versions')
+		.insert({ experiment_id: experimentId, version_number: nextVersion, config });
+
+	if (error) { console.error('Failed to save config version:', error); throw new Error('Failed to save config version'); }
+}
+
+export async function listConfigVersions(experimentId: string) {
+	const supabase = getServerSupabase();
+	const { data, error } = await supabase
+		.from('experiment_config_versions')
+		.select('id, version_number, created_at')
+		.eq('experiment_id', experimentId)
+		.order('version_number', { ascending: false });
+
+	if (error) { console.error('Failed to list config versions:', error); throw new Error('Failed to list config versions'); }
+	return data || [];
+}
+
+export async function rollbackToVersion(experimentId: string, versionId: string) {
+	const supabase = getServerSupabase();
+	const { data: version, error } = await supabase
+		.from('experiment_config_versions')
+		.select('config')
+		.eq('id', versionId)
+		.eq('experiment_id', experimentId)
+		.single();
+
+	if (error || !version) throw new Error('Version not found');
+
+	await updateExperiment(experimentId, { config: version.config as Record<string, unknown> });
+	await saveConfigVersion(experimentId, version.config);
 }
 
 export async function getParticipants(experimentId: string) {
@@ -107,9 +161,10 @@ export async function getParticipants(experimentId: string) {
 		.eq('experiment_id', experimentId)
 		.order('registered_at', { ascending: false });
 
-	if (error) throw new Error(`Failed to load participants: ${error.message}`);
+	if (error) { console.error('Failed to load participants:', error); throw new Error('Failed to load participants'); }
 
 	// Get response counts per participant
+	// TODO: replace with a DB-side count() query when participant counts grow large
 	const { data: responses } = await supabase
 		.from('responses')
 		.select('participant_id')
@@ -126,6 +181,95 @@ export async function getParticipants(experimentId: string) {
 		...p,
 		responseCount: countMap[p.id] || 0
 	}));
+}
+
+export async function getParticipantDetail(participantId: string) {
+	const supabase = getServerSupabase();
+
+	const { data: participant, error: pErr } = await supabase
+		.from('participants')
+		.select('id, email, registration_data, registered_at')
+		.eq('id', participantId)
+		.single();
+
+	if (pErr || !participant) throw new Error('Participant not found');
+
+	const { data: responses, error: rErr } = await supabase
+		.from('responses')
+		.select('phase_id, stimulus_id, response_data, created_at, response_index')
+		.eq('participant_id', participantId)
+		.order('created_at', { ascending: true });
+
+	if (rErr) { console.error('Failed to load responses:', rErr); throw new Error('Failed to load responses'); }
+
+	// Group responses by phase_id
+	const responsesByPhase: Record<string, Array<{
+		stimulusId: string;
+		responseData: Record<string, unknown>;
+		createdAt: string;
+		responseIndex: number;
+	}>> = {};
+
+	for (const r of responses ?? []) {
+		if (!responsesByPhase[r.phase_id]) responsesByPhase[r.phase_id] = [];
+		responsesByPhase[r.phase_id].push({
+			stimulusId: r.stimulus_id,
+			responseData: r.response_data ?? {},
+			createdAt: r.created_at,
+			responseIndex: r.response_index ?? 0
+		});
+	}
+
+	return { participant, responsesByPhase };
+}
+
+export async function deleteParticipant(participantId: string) {
+	const supabase = getServerSupabase();
+	const { error } = await supabase.from('participants').delete().eq('id', participantId);
+	if (error) { console.error('Failed to delete participant:', error); throw new Error('Failed to delete participant'); }
+}
+
+export async function resetParticipantResponses(participantId: string) {
+	const supabase = getServerSupabase();
+	const { error } = await supabase.from('responses').delete().eq('participant_id', participantId);
+	if (error) { console.error('Failed to reset responses:', error); throw new Error('Failed to reset responses'); }
+}
+
+export async function deleteParticipants(participantIds: string[]) {
+	if (participantIds.length === 0) return;
+	const supabase = getServerSupabase();
+	const { error } = await supabase.from('participants').delete().in('id', participantIds);
+	if (error) { console.error('Failed to delete participants:', error); throw new Error('Failed to delete participants'); }
+}
+
+export async function getExperimentStats(experimentId: string) {
+	const supabase = getServerSupabase();
+
+	// TODO: replace with a DB-side aggregate when response volume grows large
+	const { data: responses } = await supabase
+		.from('responses')
+		.select('phase_id, stimulus_id, participant_id')
+		.eq('experiment_id', experimentId);
+
+	const byPhase: Record<string, Set<string>> = {};
+	const byStimulusCount: Record<string, number> = {};
+
+	for (const r of responses ?? []) {
+		if (!byPhase[r.phase_id]) byPhase[r.phase_id] = new Set();
+		byPhase[r.phase_id].add(r.participant_id);
+		byStimulusCount[r.stimulus_id] = (byStimulusCount[r.stimulus_id] || 0) + 1;
+	}
+
+	return {
+		byPhase: Object.entries(byPhase).map(([phaseId, set]) => ({
+			phaseId,
+			participantsStarted: set.size
+		})),
+		byStimulusCount: Object.entries(byStimulusCount).map(([stimulusId, responseCount]) => ({
+			stimulusId,
+			responseCount
+		})).sort((a, b) => a.responseCount - b.responseCount)
+	};
 }
 
 export async function getResponseData(experimentId: string) {
@@ -146,6 +290,24 @@ export async function getResponseData(experimentId: string) {
 		.eq('experiment_slug', exp.slug)
 		.order('created_at', { ascending: true });
 
-	if (error) throw new Error(`Failed to load response data: ${error.message}`);
-	return data || [];
+	if (error) { console.error('Failed to load response data:', error); throw new Error('Failed to load response data'); }
+
+	// Fetch participant_id and registration_data for each unique participant email
+	const emails = [...new Set((data || []).map((r) => r.participant_email as string))];
+	const { data: participants } = await supabase
+		.from('participants')
+		.select('id, email, registration_data')
+		.eq('experiment_id', experimentId)
+		.in('email', emails);
+
+	const participantMap: Record<string, { id: string; registration_data: Record<string, unknown> }> = {};
+	for (const p of participants ?? []) {
+		participantMap[p.email] = { id: p.id, registration_data: p.registration_data };
+	}
+
+	return (data || []).map((row) => ({
+		...row,
+		participant_id: participantMap[row.participant_email as string]?.id ?? null,
+		registration_data: participantMap[row.participant_email as string]?.registration_data ?? null
+	}));
 }

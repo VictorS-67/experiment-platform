@@ -21,3 +21,14 @@ Thumbs.db
 # Vite
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Local
+previous_expe_data/
+.credentials
+.claude
+.vscode
+.bug_list.md
+
+# Data exports — contain PII / session tokens, never commit
+backup-*.json
+*.csv

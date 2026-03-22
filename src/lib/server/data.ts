@@ -49,7 +49,7 @@ export async function createParticipant(
 		.select('*')
 		.single();
 
-	if (error) throw new Error(`Failed to register: ${error.message}`);
+	if (error) { console.error('Failed to register participant:', error); throw new Error('Failed to register'); }
 	return data as ParticipantRecord & { session_token: string };
 }
 
@@ -73,7 +73,7 @@ export async function loadResponses(
 	}
 
 	const { data, error } = await query;
-	if (error) throw new Error(`Failed to load responses: ${error.message}`);
+	if (error) { console.error('Failed to load responses:', error); throw new Error('Failed to load responses'); }
 	return (data ?? []) as ResponseRecord[];
 }
 
@@ -99,7 +99,7 @@ export async function saveResponse(
 		.select()
 		.single();
 
-	if (error) throw new Error(`Failed to save response: ${error.message}`);
+	if (error) { console.error('Failed to save response:', error); throw new Error('Failed to save response'); }
 	return data as ResponseRecord;
 }
 
@@ -115,8 +115,9 @@ export async function uploadFile(
 	contentType: string,
 	experimentId: string
 ): Promise<string> {
-	// Validate content type
-	if (!ALLOWED_AUDIO_TYPES.includes(contentType)) {
+	// Validate content type (strip codec parameters like ";codecs=opus")
+	const baseType = contentType.split(';')[0].trim();
+	if (!ALLOWED_AUDIO_TYPES.includes(baseType)) {
 		throw new Error(`Disallowed file type: ${contentType}`);
 	}
 
@@ -136,6 +137,6 @@ export async function uploadFile(
 		.from(bucket)
 		.upload(normalizedPath, file, { contentType, upsert: false });
 
-	if (error) throw new Error(`Failed to upload file: ${error.message}`);
+	if (error) { console.error('Failed to upload file:', error); throw new Error('Failed to upload file'); }
 	return normalizedPath;
 }

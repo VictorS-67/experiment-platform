@@ -16,6 +16,10 @@
 
 	let stimulusType = $derived(item.type ?? config.type);
 
+	function resolveTemplate(template: string, metadata: Record<string, unknown>): string {
+		return template.replace(/\{metadata\.([^}]+)\}/g, (_, key) => String(metadata[key] ?? ''));
+	}
+
 	function resolveUrl(item: StimulusItemType): string {
 		if (item.url) return item.url;
 		if (item.filename && config.storagePath) {
@@ -47,4 +51,10 @@
 	</div>
 {:else}
 	<p class="text-gray-400">Unknown stimulus type: {stimulusType}</p>
+{/if}
+
+{#if config.messageTemplate}
+	<p class="mt-3 text-center text-gray-700 italic">
+		{resolveTemplate(config.messageTemplate, item.metadata ?? {})}
+	</p>
 {/if}

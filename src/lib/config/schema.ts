@@ -134,6 +134,7 @@ const GatekeeperQuestion = z.object({
 const ReviewConfig = z.object({
 	sourcePhase: z.string(),
 	filterEmpty: z.boolean().default(true),
+	replayMode: z.enum(['segment', 'full-highlight']).default('segment'),
 	responseWidgets: z.array(ResponseWidget)
 });
 
@@ -177,6 +178,8 @@ const StimuliConfig = z.object({
 	type: z.enum(['video', 'image', 'audio', 'text', 'mixed']),
 	source: z.enum(['upload', 'external-urls', 'supabase-storage']).default('supabase-storage'),
 	storagePath: z.string().optional(),
+	messageTemplate: z.string().optional(),
+	metadataKeys: z.array(z.string()).optional(),
 	items: z.array(StimulusItem)
 });
 
@@ -220,4 +223,5 @@ export type TutorialStepType = z.infer<typeof TutorialStep>;
 export type WidgetOptionType = z.infer<typeof WidgetOption>;
 export type FieldOptionType = z.infer<typeof FieldOption>;
 export type StimuliConfigType = z.infer<typeof StimuliConfig>;
+export type ReviewConfigType = z.infer<typeof ReviewConfig>;
 export type LocalizedStringType = z.infer<typeof LocalizedString>;

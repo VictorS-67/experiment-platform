@@ -148,8 +148,7 @@
 					id={`widget-input-${widget.id}`}
 					type="range"
 					class="flex-1 accent-indigo-600"
-					value={value || String(min)}
-					oninput={(e) => { value = e.currentTarget.value; }}
+					bind:value
 					{min}
 					{max}
 					{step}
@@ -158,7 +157,7 @@
 					<span class="text-xs text-gray-500 shrink-0">{i18n.localized(widget.config.maxLabel)}</span>
 				{/if}
 			</div>
-			<p class="text-center text-sm font-medium text-indigo-600 mt-1">{value || '—'}</p>
+			<p class="text-center text-sm font-medium text-indigo-600 mt-1">{value}</p>
 		</div>
 	{:else if widget.type === 'multiselect'}
 		{@const selected = value ? value.split(',').filter(Boolean) : []}

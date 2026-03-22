@@ -9,30 +9,33 @@ Detailed roadmap for the Experiment Platform. Organized by priority and effort.
 **Goal**: Get the platform live with real participants.
 
 ### 5.1 — Deploy to Vercel
-- [ ] Create Vercel project, connect Git repository
-- [ ] Set environment variables (`PUBLIC_SUPABASE_URL`, `PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`)
-- [ ] Test production build (`npm run build` + `npm run preview` locally first)
+- [x] Create Vercel project, connect Git repository
+- [x] Set environment variables (`PUBLIC_SUPABASE_URL`, `PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`)
+- [x] Switched to `@sveltejs/adapter-vercel`, production build succeeds
+- [x] Verified reads/writes to Supabase work in production
 - [ ] Configure custom domain if needed
-- [ ] Verify CSP headers work in production (Supabase URLs must match)
-- [ ] Test file uploads (audio recording) work end-to-end in production
+- [x] Test file uploads (audio recording) work end-to-end in production
+- [x] Add Vercel URL to Supabase Auth "Redirect URLs" for admin auth in production
 
 ### 5.2 — Migrate Existing Data
-- [ ] Export data from original Google Sheets experiment (`movement-to-onomatopoeia`)
-- [ ] Write migration script to import participants + responses into Supabase
-- [ ] Map old response format to new `response_data` JSONB structure
-- [ ] Verify migrated data appears correctly in admin data view + CSV export
-- [ ] Verify migrated participants can log back in (email match)
+- [x] Export data from original Google Sheets experiments (CSVs in `previous_expe_data/`)
+- [x] Export audio recordings (in `previous_expe_data/audio/`)
+- [x] Create proper `movement-description` JSON config (70 stimuli, widgets: emotion, description, timestamps)
+- [x] Write migration script to import participants + responses into Supabase
+- [x] Upload audio recordings to Supabase Storage under correct experiment paths
+- [x] Add `metadata.originalName` to stimuli items in both configs (from `_Names.csv` mapping files)
+- [x] Run migration script (`node scripts/migrate-previous-data.js`) — seed experiments first with `node scripts/seed.js --all`
+- [x] Verify migrated data appears correctly in admin data view + CSV export
+- [x] Verify migrated participants can log back in (email match)
 
 ### 5.3 — Complete Missing Widget Implementations
-- [ ] **`slider` widget**: Add rendering in `WidgetRenderer.svelte` — HTML `<input type="range">` with min/max/step, optional endpoint labels, live value display
-- [ ] **`multiselect` widget**: Add rendering — checkboxes or multi-select dropdown, store as comma-separated or JSON array string
+- [x] **`slider` widget**: `<input type="range">` with min/max/step, endpoint labels, live value display
+- [x] **`multiselect` widget**: Toggle buttons, comma-separated storage
 - [ ] Test both with save/load round-trip
 
 ### 5.4 — Stimulus Ordering Fix
-- [ ] **`random-per-participant`**: Currently `random` re-shuffles on every page load. Implement deterministic per-participant ordering:
-  - Option A: Seed a PRNG with `hash(participant_id + phase_id)` for consistent shuffle
-  - Option B: Store the shuffled order in `registration_data` or a new `participant_phases` table on first visit
-- [ ] Ensure ordering persists across sessions (participant closes browser and returns)
+- [x] **`random-per-participant`**: Deterministic seeded shuffle (djb2 hash + mulberry32 PRNG + Fisher-Yates, seed = `participantId + phaseId`)
+- [x] Ordering persists across sessions (same seed always produces same permutation)
 
 ### 5.5 — End-to-End Testing with Real Users
 - [ ] Run a small pilot (5-10 participants) on the deployed platform
@@ -42,11 +45,62 @@ Detailed roadmap for the Experiment Platform. Organized by priority and effort.
 
 ---
 
-## Phase 6: Quality & Polish
+## Phase 6: Enhanced Admin Features
+
+**Goal**: Make the admin dashboard more powerful for researchers.
+
+### 6.1 — Config Editor Completeness
+- [x] **Tutorial editing**: Add form fields for tutorial config (welcome text, steps with targetSelector/validation, completion text, sampleStimuliIds)
+- [x] **Per-phase introduction**: Expose `phase.introduction` (title + body) in the form editor
+- [x] **Completion config**: Expose `phase.completion` fields (title, body, nextPhaseButton, stayButton) — currently only editable in JSON mode
+- [x] **Top-level completion**: Expose `config.completion` (redirectUrl, showSummary)
+- [x] **Widget config options**: Expose per-widget-type config in the form editor:
+  - textarea: showCharCount, minLength, maxLength
+  - likert: min, max, minLabel, maxLabel
+  - number: min, max, step
+  - slider: min, max, step, minLabel, maxLabel
+  - timestamp-range: captureStartLabel, captureEndLabel
+  - audio-recording: maxDurationSeconds, maxFileSizeMB
+- [x] **Stimuli management**: Add/remove/reorder stimulus items in the form editor (currently items array must be edited in JSON mode)
+- [x] **Field validation config**: Expose `validation` options (min, max, pattern) for registration fields in form editor
+
+### 6.2 — Experiment Duplication
+- [x] "Duplicate" button on experiment list and edit pages
+- [x] Creates a copy with a new slug (e.g., `my-experiment-copy`), status `draft`
+- [x] Deep clones the config JSONB
+- [x] Does NOT copy participants or responses
+
+### 6.3 — Participant Management
+- [x] View individual participant detail page (all responses, registration data, timestamps)
+- [x] Delete individual participant and cascade-delete their responses
+- [x] "Reset" participant (delete responses but keep registration — lets them redo the experiment)
+- [x] Bulk operations: select multiple participants, delete/export
+- [x] Stats panel on data page: total participants, per-phase started counts, stimulus response distribution
+
+### 6.4 — Data Export Improvements
+- [x] **Per-phase export**: Filter CSV by phase_id
+- [x] **JSON export**: Alternative to CSV for nested response_data
+- [x] **Timestamp formatting**: Option to export timestamps as human-readable dates vs ISO strings
+- [x] **Include registration data columns**: Flatten `registration_data` JSONB into separate CSV columns
+- [ ] **Audio file download**: Bulk download all audio recordings for an experiment as a ZIP (deferred — Supabase Storage dashboard covers this at current scale)
+- [x] **Export configuration**: Let researchers choose which columns to include (via export options panel)
+
+### 6.5 — Real-Time Participant Monitoring
+- [x] ~~Dropped as standalone feature~~: Completion rates and stimulus dropout stats added to data page as a static stats panel (loaded at page load). At 1-2 participants/day, real-time polling adds complexity with negligible value.
+
+### 6.6 — Experiment Versioning
+- [x] Track config changes over time (store previous versions) — `experiment_config_versions` table + migration 007
+- [ ] Show diff between versions (deferred)
+- [x] Ability to rollback to a previous config version
+- [x] Warn when editing a config that has active participants (changing stimuli/widgets mid-experiment can invalidate data)
+
+---
+
+## Phase 7: Quality & Polish
 
 **Goal**: Improve reliability, accessibility, and user experience.
 
-### 6.1 — Test Suite
+### 7.1 — Test Suite
 - [ ] Set up Vitest for unit tests
 - [ ] **Unit tests**:
   - [ ] Zod schema validation (valid configs pass, invalid configs fail with correct errors)
@@ -64,7 +118,7 @@ Detailed roadmap for the Experiment Platform. Organized by priority and effort.
 - [ ] Add test commands to `package.json`
 - [ ] Consider CI pipeline (GitHub Actions)
 
-### 6.2 — UI Polish
+### 7.2 — UI Polish
 - [ ] **Mobile responsiveness**: Test and fix layout on small screens (stimulus nav wrapping, widget sizing, admin sidebar)
 - [ ] **Loading states**: Add skeleton screens or spinners for:
   - Initial experiment config load
@@ -79,65 +133,12 @@ Detailed roadmap for the Experiment Platform. Organized by priority and effort.
 - [ ] **Toast notifications**: Replace the current simple `message` state with a proper toast system (auto-dismiss, stackable, different types)
 - [ ] **Keyboard navigation**: Ensure all interactive elements are keyboard-accessible (tab order, Enter/Space activation, Escape to close modals)
 
-### 6.3 — Config Editor Completeness
-- [ ] **Tutorial editing**: Add form fields for tutorial config (welcome text, steps with targetSelector/validation, completion text, sampleStimuliIds)
-- [ ] **Per-phase introduction**: Expose `phase.introduction` (title + body) in the form editor
-- [ ] **Completion config**: Expose `phase.completion` fields (title, body, nextPhaseButton, stayButton) — currently only editable in JSON mode
-- [ ] **Top-level completion**: Expose `config.completion` (redirectUrl, showSummary)
-- [ ] **Widget config options**: Expose per-widget-type config in the form editor:
-  - textarea: showCharCount, minLength, maxLength
-  - likert: min, max, minLabel, maxLabel
-  - number: min, max, step
-  - slider: min, max, step, minLabel, maxLabel
-  - timestamp-range: captureStartLabel, captureEndLabel
-  - audio-recording: maxDurationSeconds, maxFileSizeMB
-- [ ] **Stimuli management**: Add/remove/reorder stimulus items in the form editor (currently items array must be edited in JSON mode)
-- [ ] **Field validation config**: Expose `validation` options (min, max, pattern) for registration fields in form editor
-
-### 6.4 — Accessibility
+### 7.3 — Accessibility
 - [ ] Fix a11y warnings in ConfigEditor (labels not associated with controls)
 - [ ] Add ARIA labels to stimulus navigation buttons
 - [ ] Ensure color contrast meets WCAG AA for all status badges and buttons
 - [ ] Add `aria-live` regions for dynamic content updates (save success/error messages)
 - [ ] Screen reader testing for the full participant flow
-
----
-
-## Phase 7: Enhanced Admin Features
-
-**Goal**: Make the admin dashboard more powerful for researchers.
-
-### 7.1 — Experiment Duplication
-- [ ] "Duplicate" button on experiment list and edit pages
-- [ ] Creates a copy with a new slug (e.g., `my-experiment-copy`), status `draft`
-- [ ] Deep clones the config JSONB
-- [ ] Does NOT copy participants or responses
-
-### 7.2 — Participant Management
-- [ ] View individual participant detail page (all responses, registration data, timestamps)
-- [ ] Delete individual participant and cascade-delete their responses
-- [ ] "Reset" participant (delete responses but keep registration — lets them redo the experiment)
-- [ ] Bulk operations: select multiple participants, delete/export
-
-### 7.3 — Data Export Improvements
-- [ ] **Per-phase export**: Filter CSV by phase_id
-- [ ] **JSON export**: Alternative to CSV for nested response_data
-- [ ] **Timestamp formatting**: Option to export timestamps as human-readable dates vs ISO strings
-- [ ] **Include registration data columns**: Flatten `registration_data` JSONB into separate CSV columns
-- [ ] **Audio file download**: Bulk download all audio recordings for an experiment as a ZIP
-- [ ] **Export configuration**: Let researchers choose which columns to include
-
-### 7.4 — Real-Time Participant Monitoring
-- [ ] Dashboard showing live participant count, completion rates per phase
-- [ ] Use Supabase Realtime subscriptions or periodic polling
-- [ ] Show which stimuli have the most/fewest responses
-- [ ] Alert when a participant has been inactive for a configurable duration
-
-### 7.5 — Experiment Versioning
-- [ ] Track config changes over time (store previous versions)
-- [ ] Show diff between versions
-- [ ] Ability to rollback to a previous config version
-- [ ] Warn when editing a config that has active participants (changing stimuli/widgets mid-experiment can invalidate data)
 
 ---
 
@@ -233,11 +234,22 @@ Detailed roadmap for the Experiment Platform. Organized by priority and effort.
 
 Items that should be addressed along the way, not necessarily as dedicated phases:
 
-- [ ] **Remove legacy endpoints**: `src/routes/e/[slug]/survey/{save,upload}` are duplicates of the phase-specific endpoints
+- [x] ~~**Remove legacy endpoints**~~: Deleted `src/routes/e/[slug]/survey/{save,upload}`
+- [x] ~~**Environment variable validation**~~: Added fail-fast validation in `src/lib/server/supabase.ts`
+- [x] ~~**Rate limiting**~~: In-memory sliding window on `/auth`, `/save`, `/upload` endpoints in `hooks.server.ts`. ⚠️ Note: module-scope state resets on serverless cold starts — effective only on long-running Node processes. Replace with Redis/Upstash for production Vercel deployment.
+- [x] ~~**CSRF protection**~~: Origin header checking on all API POST endpoints
+- [x] ~~**Fix `response_flat` SECURITY DEFINER**~~: Migration 006 — `security_invoker = true`
+- [x] ~~**Remove redundant `_timestamp` from response_data**~~: Client was recording `_timestamp` alongside server-side `created_at`. Removed — `created_at` is the authoritative timestamp.
+- [x] ~~**Deduplicate `COOKIE_OPTIONS`**~~: Was defined identically in 3 files. Extracted to `src/lib/server/cookies.ts`.
+- [x] ~~**Remove dead code `getAdminUser()`**~~: Was exported but never called (admin auth fully handled in `hooks.server.ts`).
+- [x] ~~**DB error messages leaking to clients**~~: All `throw new Error(\`...: ${error.message}\`)` replaced with generic messages + `console.error()` for server-side logging.
+- [x] ~~**`.single()` on admin_users throws on no-row**~~: Fixed to `.maybeSingle()` in `hooks.server.ts` — prevents 500 errors for valid Supabase users not in the admin table.
+- [ ] **Serverless rate limiting**: The current in-memory rate limiter is ineffective on Vercel (resets per cold start). Replace with Redis/Upstash-backed solution before high-traffic launch.
+- [ ] **Full RLS enforcement**: Current RLS relies on app-layer filtering for most reads (service role bypasses RLS). Consider adding DB-layer policies on `participants`/`responses` for defense in depth.
+- [ ] **WidgetRenderer split**: `WidgetRenderer.svelte` handles 8+ widget types in one file. Consider splitting into per-type components when adding new widget types (Phase 8+).
+- [ ] **DB-side aggregates**: `getParticipants()` and `getExperimentStats()` fetch all rows and aggregate in JS. Fine at current scale; add a DB `count()` query or view when participant/response counts grow.
+- [ ] **Clean up `HANDOFF.md`**: Outdated from Phase 2, now superseded by `SUMMARY.md`
 - [ ] **Supabase types**: Consider generating TypeScript types from the database schema (`supabase gen types`)
-- [ ] **Environment variable validation**: Add Zod validation for env vars at startup (fail fast if misconfigured)
 - [ ] **Error logging**: Add structured logging (currently just `console.error`) — consider Sentry or similar
-- [ ] **Rate limiting**: Add rate limits to auth and save endpoints to prevent abuse
-- [ ] **CSRF protection**: SvelteKit form actions have built-in CSRF, but API endpoints (`+server.ts`) do not — add origin checking
 - [ ] **Session token rotation**: Currently session tokens never change — consider rotating on each login for better security
 - [ ] **Database backups**: Set up automated Supabase backups before going live with real data

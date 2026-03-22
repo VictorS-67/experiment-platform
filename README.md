@@ -11,24 +11,30 @@ Built with **SvelteKit 5**, **Supabase**, and **Tailwind CSS**.
 **For Participants**
 - Email-based registration with configurable form fields (text, number, select, conditional visibility)
 - Multi-phase experiments: stimulus-response phases + review phases
-- Rich response widgets: text, textarea, likert scales, number inputs, dropdowns, timestamp annotation, audio recording
+- Rich response widgets: text, textarea, likert scales, number inputs, sliders, dropdowns, multiselect, timestamp annotation, audio recording
 - Gatekeeper questions (yes/no gate before showing widgets)
 - Interactive tutorial with step-by-step overlay (Driver.js)
 - Bilingual support (English / Japanese) with in-app language switcher
 - Session persistence via httpOnly cookies — close the browser, come back later
 
 **For Researchers (Admin Dashboard)**
-- Create, edit, and manage experiments from `/admin`
+- Create, edit, duplicate, and manage experiments from `/admin`
 - Dual config editor: visual Form mode or raw JSON mode
 - Zod schema validation with human-readable error messages on save
-- Participant data table with response counts
-- One-click CSV export of all response data
+- Participant data table: view individual detail pages, reset or delete participants, bulk operations
+- CSV export with two styles: raw (one row per phase response) and research-friendly (phases merged side-by-side, response_data keys expanded into columns)
+- JSON export alternative; optional registration data columns; ISO or human-readable timestamps
+- Stats panel: participants per phase, stimulus response distribution
 - Experiment lifecycle management (draft → active → paused → archived)
+- Config versioning: every save stored as a version, rollback to any previous config
 
 **Architecture Highlights**
 - Config-driven: everything renders from a validated JSON config stored as JSONB in Postgres
 - All database writes are server-side only (service role key) — the browser never touches Supabase directly
-- Row-Level Security policies tightened across 5 migrations
+- Row-Level Security policies tightened across 7 migrations
+- Rate limiting (per-IP sliding window) and CSRF origin checking on all API endpoints
+- DB errors never exposed to clients — generic messages surfaced, details logged server-side
+- Environment variable validation at startup (fail-fast)
 - Security headers: CSP, X-Frame-Options, Permissions-Policy, etc.
 
 ---
@@ -72,6 +78,8 @@ supabase/migrations/002_rls_policies.sql
 supabase/migrations/003_tighten_rls.sql
 supabase/migrations/004_session_security.sql
 supabase/migrations/005_remove_anon_select.sql
+supabase/migrations/006_fix_view_security.sql
+supabase/migrations/007_experiment_versions.sql
 ```
 
 ### 4. Create an admin user
@@ -129,8 +137,15 @@ src/
 │   └── e/[slug]/                # Participant-facing experiment routes
 configs/                         # Example experiment JSON configs
 scripts/                         # DB seeding + video upload scripts
-supabase/migrations/             # 5 SQL migration files
+supabase/migrations/             # 6 SQL migration files
 ```
+
+---
+
+## Stimulus Naming Convention
+
+- **Existing experiments** (`movement-to-onomatopoeia`, `movement-description`): Stimulus items use numeric IDs (e.g., `"4"` → `4.mp4`) because response data already references these. Original filenames are stored in `metadata.originalName` for each stimulus item, with full mapping available in `previous_expe_data/{experiment}/{experiment}_Names.csv`.
+- **New experiments**: Use the original filename (without extension) as both the stimulus `id` and `filename`. Example: `{ "id": "JP_01_contempt_1_M", "filename": "JP_01_contempt_1_M.mp4" }`.
 
 ---
 
@@ -209,12 +224,13 @@ See `configs/movement-onomatopoeia.json` for a complete real-world example.
 
 ## Deployment
 
-The project uses `@sveltejs/adapter-auto`, which auto-detects the deployment platform. For Vercel:
+The project uses `@sveltejs/adapter-vercel` for deployment on Vercel.
 
 1. Push to a Git repository
 2. Import in Vercel
 3. Set the three environment variables (`PUBLIC_SUPABASE_URL`, `PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`)
 4. Deploy
+5. Add the Vercel URL to Supabase Auth → URL Configuration → Redirect URLs (needed for admin login)
 
 ---
 

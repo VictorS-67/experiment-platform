@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { enhance } from '$app/forms';
+
 	let { data } = $props();
 
 	const statusColors: Record<string, string> = {
@@ -70,13 +72,21 @@
 							</td>
 							<td class="px-4 py-3 text-gray-600">{exp.participantCount}</td>
 							<td class="px-4 py-3 text-gray-500">{formatDate(exp.createdAt)}</td>
-							<td class="px-4 py-3 text-right space-x-2">
-								<a href="/admin/experiments/{exp.id}" class="text-indigo-600 hover:text-indigo-800 text-xs font-medium">
-									Edit
-								</a>
-								<a href="/admin/experiments/{exp.id}/data" class="text-gray-500 hover:text-gray-700 text-xs font-medium">
-									Data
-								</a>
+							<td class="px-4 py-3 text-right">
+								<div class="flex items-center justify-end gap-3">
+									<a href="/admin/experiments/{exp.id}" class="text-indigo-600 hover:text-indigo-800 text-xs font-medium">
+										Edit
+									</a>
+									<a href="/admin/experiments/{exp.id}/data" class="text-gray-500 hover:text-gray-700 text-xs font-medium">
+										Data
+									</a>
+									<form method="POST" action="?/duplicate" use:enhance>
+										<input type="hidden" name="id" value={exp.id} />
+										<button type="submit" class="text-gray-400 hover:text-gray-600 text-xs font-medium cursor-pointer">
+											Duplicate
+										</button>
+									</form>
+								</div>
 							</td>
 						</tr>
 					{/each}
@@ -84,4 +94,14 @@
 			</table>
 		</div>
 	{/if}
+
+	<div class="mt-8 pt-6 border-t border-gray-200">
+		<a
+			href="/admin/backup"
+			class="text-sm px-4 py-2 border border-gray-300 rounded hover:bg-gray-50 text-gray-600 transition-colors"
+		>
+			Download Backup
+		</a>
+		<p class="mt-2 text-xs text-gray-400">Downloads all experiments, participants, and responses as a JSON file.</p>
+	</div>
 </div>

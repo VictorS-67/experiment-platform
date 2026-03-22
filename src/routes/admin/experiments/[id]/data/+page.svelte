@@ -1,5 +1,49 @@
 <script lang="ts">
-	let { data } = $props();
+	import { enhance } from '$app/forms';
+
+	let { data, form } = $props();
+
+	// Export options
+	let selectedPhase = $state('');
+	let exportFormat = $state<'csv' | 'json'>('csv');
+	let exportStyle = $state<'raw' | 'research'>('research');
+	let dateFormat = $state<'iso' | 'human'>('human');
+	let includeRegistration = $state(true);
+	let showExportOptions = $state(false);
+
+	// Bulk delete
+	let selectedIds = $state<Set<string>>(new Set());
+	let bulkDeleting = $state(false);
+
+	let toast = $state<{ type: 'success' | 'error'; message: string } | null>(null);
+
+	$effect(() => {
+		if (form?.success) {
+			selectedIds = new Set();
+			toast = { type: 'success', message: 'Deleted successfully.' };
+			setTimeout(() => (toast = null), 3000);
+		} else if (form?.error) {
+			toast = { type: 'error', message: form.error };
+			setTimeout(() => (toast = null), 4000);
+		}
+	});
+
+	function toggleAll(checked: boolean) {
+		if (checked) {
+			selectedIds = new Set(data.participants.map((p: { id: string }) => p.id));
+		} else {
+			selectedIds = new Set();
+		}
+	}
+
+	function toggleOne(id: string) {
+		const next = new Set(selectedIds);
+		if (next.has(id)) next.delete(id);
+		else next.add(id);
+		selectedIds = next;
+	}
+
+	let allSelected = $derived(data.participants.length > 0 && selectedIds.size === data.participants.length);
 
 	function getTitle(config: Record<string, unknown>): string {
 		const meta = config?.metadata as Record<string, unknown> | undefined;
@@ -9,19 +53,41 @@
 
 	function formatDate(dateStr: string): string {
 		return new Date(dateStr).toLocaleString('en-US', {
-			year: 'numeric',
-			month: 'short',
-			day: 'numeric',
-			hour: '2-digit',
-			minute: '2-digit'
+			year: 'numeric', month: 'short', day: 'numeric',
+			hour: '2-digit', minute: '2-digit'
 		});
 	}
 
 	function getName(registrationData: Record<string, unknown> | null): string {
 		if (!registrationData) return '—';
-		const name = registrationData.name as string | undefined;
-		return name || '—';
+		return (registrationData.name as string) || '—';
 	}
+
+	// Get phases from config for stats display and export dropdown
+	let configPhases = $derived(() => {
+		const cfg = data.experiment.config as Record<string, unknown>;
+		const phases = cfg?.phases as Array<{ id: string; title: Record<string, string> }> | undefined;
+		return phases ?? [];
+	});
+
+	function getPhaseName(phaseId: string): string {
+		const phase = configPhases().find((p) => p.id === phaseId);
+		if (!phase) return phaseId;
+		const t = phase.title;
+		return t?.en || t?.ja || Object.values(t || {})[0] || phaseId;
+	}
+
+	let exportUrl = $derived(() => {
+		const base = `/admin/experiments/${data.experiment.id}/data/export`;
+		const params = new URLSearchParams();
+		if (selectedPhase) params.set('phase', selectedPhase);
+		if (exportFormat !== 'csv') params.set('format', exportFormat);
+		if (exportStyle !== 'raw') params.set('style', exportStyle);
+		if (dateFormat !== 'iso') params.set('dateFormat', dateFormat);
+		if (includeRegistration) params.set('includeRegistration', 'true');
+		const q = params.toString();
+		return q ? `${base}?${q}` : base;
+	});
 </script>
 
 <svelte:head>
@@ -38,13 +104,109 @@
 			<h1 class="text-2xl font-semibold text-gray-800">{getTitle(data.experiment.config)}</h1>
 			<p class="text-sm text-gray-500 mt-1">Participant data &amp; export</p>
 		</div>
-		<a
-			href="/admin/experiments/{data.experiment.id}/data/export"
-			class="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700 transition-colors text-sm font-medium"
-		>
-			Export CSV
-		</a>
+		<div class="relative">
+			<button
+				type="button"
+				onclick={() => (showExportOptions = !showExportOptions)}
+				class="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700 transition-colors text-sm font-medium cursor-pointer"
+			>
+				Export ▾
+			</button>
+			{#if showExportOptions}
+				<div class="absolute right-0 top-full mt-2 w-72 bg-white border border-gray-200 rounded-lg shadow-lg p-4 z-10 space-y-3">
+					<div>
+						<label class="block text-xs font-medium text-gray-600 mb-1">Phase</label>
+						<select bind:value={selectedPhase} class="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+							<option value="">All phases</option>
+							{#each configPhases() as phase}
+								<option value={phase.id}>{getPhaseName(phase.id)}</option>
+							{/each}
+						</select>
+					</div>
+					<div class="flex gap-4">
+						<label class="flex items-center gap-1.5 text-sm cursor-pointer">
+							<input type="radio" bind:group={exportFormat} value="csv" /> CSV
+						</label>
+						<label class="flex items-center gap-1.5 text-sm cursor-pointer">
+							<input type="radio" bind:group={exportFormat} value="json" /> JSON
+						</label>
+					</div>
+					<div>
+						<label class="block text-xs font-medium text-gray-600 mb-1">Style</label>
+						<div class="flex gap-4">
+							<label class="flex items-center gap-1.5 text-sm cursor-pointer">
+								<input type="radio" bind:group={exportStyle} value="raw" /> Raw
+							</label>
+							<label class="flex items-center gap-1.5 text-sm cursor-pointer">
+								<input type="radio" bind:group={exportStyle} value="research" /> Research-friendly
+							</label>
+						</div>
+					</div>
+					<div class="flex gap-4">
+						<label class="flex items-center gap-1.5 text-sm cursor-pointer">
+							<input type="radio" bind:group={dateFormat} value="iso" /> ISO dates
+						</label>
+						<label class="flex items-center gap-1.5 text-sm cursor-pointer">
+							<input type="radio" bind:group={dateFormat} value="human" /> Readable dates
+						</label>
+					</div>
+					<label class="flex items-center gap-2 text-sm cursor-pointer">
+						<input type="checkbox" bind:checked={includeRegistration} />
+						Flatten registration data into columns
+					</label>
+					<a
+						href={exportUrl()}
+						onclick={() => (showExportOptions = false)}
+						class="block w-full text-center bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700 transition-colors text-sm font-medium"
+					>
+						Download {exportFormat.toUpperCase()}
+					</a>
+				</div>
+			{/if}
+		</div>
 	</div>
+
+	{#if toast}
+		<div class="mb-4 p-3 rounded text-sm {toast.type === 'success' ? 'bg-green-50 border border-green-200 text-green-700' : 'bg-red-50 border border-red-200 text-red-700'}">
+			{toast.message}
+		</div>
+	{/if}
+
+	<!-- Stats Panel -->
+	{#if data.participants.length > 0}
+		<div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5 mb-6">
+			<h2 class="text-sm font-semibold text-gray-700 mb-3">Overview</h2>
+			<div class="flex gap-6 flex-wrap">
+				<div>
+					<p class="text-2xl font-bold text-gray-800">{data.participants.length}</p>
+					<p class="text-xs text-gray-500">participants registered</p>
+				</div>
+				{#each configPhases() as phase}
+					{@const phaseStat = data.stats.byPhase.find((s: { phaseId: string; participantsStarted: number }) => s.phaseId === phase.id)}
+					<div>
+						<p class="text-2xl font-bold text-gray-800">{phaseStat?.participantsStarted ?? 0}</p>
+						<p class="text-xs text-gray-500">{getPhaseName(phase.id)} — started</p>
+					</div>
+				{/each}
+			</div>
+			{#if data.stats.byStimulusCount.length > 0}
+				<div class="mt-4">
+					<p class="text-xs font-medium text-gray-500 mb-2">Stimulus response counts (fewest first)</p>
+					<div class="space-y-1">
+						{#each data.stats.byStimulusCount.slice(0, 10) as item}
+							<div class="flex items-center gap-2 text-xs">
+								<span class="font-mono text-gray-500 w-32 shrink-0 truncate">{item.stimulusId}</span>
+								<div class="flex-1 bg-gray-100 rounded h-2">
+									<div class="bg-indigo-400 rounded h-2" style="width: {Math.min(100, (item.responseCount / data.participants.length) * 100)}%"></div>
+								</div>
+								<span class="text-gray-600 w-6 text-right">{item.responseCount}</span>
+							</div>
+						{/each}
+					</div>
+				</div>
+			{/if}
+		</div>
+	{/if}
 
 	{#if data.participants.length === 0}
 		<div class="text-center py-16 text-gray-500">
@@ -59,6 +221,9 @@
 			<table class="w-full text-sm">
 				<thead class="bg-gray-50 border-b border-gray-200">
 					<tr>
+						<th class="px-4 py-3 w-10">
+							<input type="checkbox" checked={allSelected} onchange={(e) => toggleAll(e.currentTarget.checked)} class="cursor-pointer" />
+						</th>
 						<th class="text-left px-4 py-3 font-medium text-gray-600">Email</th>
 						<th class="text-left px-4 py-3 font-medium text-gray-600">Name</th>
 						<th class="text-left px-4 py-3 font-medium text-gray-600">Responses</th>
@@ -67,8 +232,15 @@
 				</thead>
 				<tbody class="divide-y divide-gray-100">
 					{#each data.participants as p}
-						<tr class="hover:bg-gray-50">
-							<td class="px-4 py-3 text-gray-800">{p.email}</td>
+						<tr class="hover:bg-gray-50 {selectedIds.has(p.id) ? 'bg-indigo-50' : ''}">
+							<td class="px-4 py-3 w-10">
+								<input type="checkbox" checked={selectedIds.has(p.id)} onchange={() => toggleOne(p.id)} class="cursor-pointer" />
+							</td>
+							<td class="px-4 py-3 text-gray-800">
+								<a href="/admin/experiments/{data.experiment.id}/participants/{p.id}" class="hover:text-indigo-600 hover:underline">
+									{p.email}
+								</a>
+							</td>
 							<td class="px-4 py-3 text-gray-600">{getName(p.registration_data)}</td>
 							<td class="px-4 py-3 text-gray-600">{p.responseCount}</td>
 							<td class="px-4 py-3 text-gray-500">{formatDate(p.registered_at)}</td>
@@ -79,3 +251,25 @@
 		</div>
 	{/if}
 </div>
+
+<!-- Floating bulk action bar -->
+{#if selectedIds.size > 0}
+	<div class="fixed bottom-6 left-1/2 -translate-x-1/2 bg-gray-800 text-white rounded-lg shadow-xl px-6 py-3 flex items-center gap-4 z-50">
+		<span class="text-sm">{selectedIds.size} selected</span>
+		<form method="POST" action="?/bulkDelete" use:enhance={() => {
+			bulkDeleting = true;
+			return async ({ update }) => { await update({ reset: false }); bulkDeleting = false; };
+		}}>
+			{#each [...selectedIds] as id}
+				<input type="hidden" name="participantIds" value={id} />
+			{/each}
+			<button type="submit" disabled={bulkDeleting}
+				class="text-sm px-4 py-1.5 bg-red-600 text-white rounded hover:bg-red-700 transition-colors cursor-pointer disabled:opacity-50">
+				{bulkDeleting ? 'Deleting...' : `Delete ${selectedIds.size}`}
+			</button>
+		</form>
+		<button type="button" onclick={() => (selectedIds = new Set())} class="text-sm text-gray-300 hover:text-white cursor-pointer">
+			Cancel
+		</button>
+	</div>
+{/if}

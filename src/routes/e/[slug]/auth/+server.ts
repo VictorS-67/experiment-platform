@@ -1,16 +1,10 @@
 import { json, error } from '@sveltejs/kit';
-import { dev } from '$app/environment';
 import type { RequestHandler } from './$types';
 import { findParticipantByEmail, createParticipant, getParticipantByToken, loadResponses } from '$lib/server/data';
 import { getServerSupabase } from '$lib/server/supabase';
+import { COOKIE_OPTIONS } from '$lib/server/cookies';
 
-const COOKIE_OPTIONS = {
-	path: '/',
-	httpOnly: true,
-	sameSite: 'lax' as const,
-	secure: !dev,
-	maxAge: 60 * 60 * 24 * 90 // 90 days
-};
+const PARTICIPANT_COOKIE_OPTIONS = { ...COOKIE_OPTIONS, maxAge: 60 * 60 * 24 * 90 }; // 90 days
 
 // POST: login (find existing) or register (create new)
 export const POST: RequestHandler = async ({ params, request, cookies }) => {
@@ -42,7 +36,7 @@ export const POST: RequestHandler = async ({ params, request, cookies }) => {
 		}
 
 		// Set session cookie
-		cookies.set('session_token', participant.session_token, COOKIE_OPTIONS);
+		cookies.set('session_token', participant.session_token, PARTICIPANT_COOKIE_OPTIONS);
 
 		// Load existing responses
 		const responses = await loadResponses(experimentId, participant.id);
@@ -68,7 +62,7 @@ export const POST: RequestHandler = async ({ params, request, cookies }) => {
 		const participant = await createParticipant(experimentId, email, registrationData);
 
 		// Set session cookie
-		cookies.set('session_token', participant.session_token, COOKIE_OPTIONS);
+		cookies.set('session_token', participant.session_token, PARTICIPANT_COOKIE_OPTIONS);
 
 		return json({
 			participant: {
