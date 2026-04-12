@@ -13,6 +13,11 @@ Built with **SvelteKit 5**, **Supabase**, and **Tailwind CSS**.
 - Multi-phase experiments: stimulus-response phases + review phases
 - Rich response widgets: text, textarea, likert scales, number inputs, sliders, dropdowns, multiselect, timestamp annotation, audio recording
 - Gatekeeper questions (yes/no gate before showing widgets)
+- Conditional widget visibility: show/hide widgets based on other widget values
+- Skip rules: automatically skip stimuli based on prior responses
+- Phase branching: navigate to different next phases based on response values
+- Stimulus chunking into blocks with Latin square / random-per-participant counterbalancing
+- Break screens between blocks with optional countdown timer + block-level progress display
 - Interactive tutorial with step-by-step overlay (Driver.js)
 - Bilingual support (English / Japanese) with in-app language switcher
 - Session persistence via httpOnly cookies — close the browser, come back later
@@ -27,11 +32,14 @@ Built with **SvelteKit 5**, **Supabase**, and **Tailwind CSS**.
 - Stats panel: participants per phase, stimulus response distribution
 - Experiment lifecycle management (draft → active → paused → archived)
 - Config versioning: every save stored as a version, rollback to any previous config
+- Stimuli list pagination + search for large (500+) item experiments
+- Admin UI for conditional logic, skip rules, branch rules, break screens, chunking
 
 **Architecture Highlights**
 - Config-driven: everything renders from a validated JSON config stored as JSONB in Postgres
 - All database writes are server-side only (service role key) — the browser never touches Supabase directly
-- Row-Level Security policies tightened across 7 migrations
+- Row-Level Security policies tightened across 8 migrations
+- Session token rotation on every login + server-side registration and response validation
 - Rate limiting (per-IP sliding window) and CSRF origin checking on all API endpoints
 - DB errors never exposed to clients — generic messages surfaced, details logged server-side
 - Environment variable validation at startup (fail-fast)
@@ -204,6 +212,8 @@ See `configs/movement-onomatopoeia.json` for a complete real-world example.
 | `npm run build` | Production build |
 | `npm run preview` | Preview production build |
 | `npm run check` | Run svelte-check (TypeScript + Svelte validation) |
+| `npm run test` | Run unit tests (Vitest) |
+| `npm run test:watch` | Run tests in watch mode |
 | `node scripts/seed.js` | Seed experiment config into database |
 | `node scripts/upload-all-videos.js` | Upload stimuli videos to Supabase Storage |
 

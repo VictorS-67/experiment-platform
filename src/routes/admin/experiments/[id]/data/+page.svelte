@@ -63,6 +63,47 @@
 		return (registrationData.name as string) || '—';
 	}
 
+	// Chunking config + per-participant chunk progress
+	let configChunks = $derived(() => {
+		const cfg = data.experiment.config as Record<string, unknown>;
+		const chunking = (cfg?.stimuli as Record<string, unknown>)?.chunking as { enabled?: boolean; chunks?: Array<{ slug: string; label?: Record<string, string> }>; minBreakMinutes?: number } | undefined;
+		return chunking?.enabled ? (chunking.chunks ?? []) : [];
+	});
+
+	function getParticipantChunkProgress(participantId: string) {
+		if (!data.chunkProgress) return null;
+		return (data.chunkProgress as Record<string, Array<{ slug: string; complete: boolean; respondedCount: number; totalCount: number; completedAt: string | null; canStartNextAt: string | null }>>)[participantId] ?? null;
+	}
+
+	function getNextChunkUrl(participantId: string): string | null {
+		const cfg = data.experiment.config as Record<string, unknown>;
+		const chunking = (cfg?.stimuli as Record<string, unknown>)?.chunking as { chunks?: Array<{ slug: string }> } | undefined;
+		const phases = cfg?.phases as Array<{ slug: string }> | undefined;
+		const firstPhaseSlug = phases?.[0]?.slug ?? 'survey';
+		const progress = getParticipantChunkProgress(participantId);
+		if (!progress || !chunking?.chunks) return null;
+		const nextChunk = chunking.chunks.find((c, i) => !progress[i]?.complete);
+		return nextChunk ? `/e/${data.experiment.slug}/c/${nextChunk.slug}/${firstPhaseSlug}` : null;
+	}
+
+	function isBreakRequired(participantId: string): boolean {
+		const progress = getParticipantChunkProgress(participantId);
+		if (!progress) return false;
+		const nextIdx = progress.findIndex(c => !c.complete);
+		if (nextIdx <= 0) return false;
+		const canStartAt = progress[nextIdx]?.canStartNextAt;
+		return !!canStartAt && new Date(canStartAt) > new Date();
+	}
+
+	function formatBreakTime(participantId: string): string {
+		const progress = getParticipantChunkProgress(participantId);
+		if (!progress) return '';
+		const nextIdx = progress.findIndex(c => !c.complete);
+		const canStartAt = progress[nextIdx]?.canStartNextAt;
+		if (!canStartAt) return '';
+		return new Date(canStartAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+	}
+
 	// Get phases from config for stats display and export dropdown
 	let configPhases = $derived(() => {
 		const cfg = data.experiment.config as Record<string, unknown>;
@@ -227,6 +268,9 @@
 						<th class="text-left px-4 py-3 font-medium text-gray-600">Email</th>
 						<th class="text-left px-4 py-3 font-medium text-gray-600">Name</th>
 						<th class="text-left px-4 py-3 font-medium text-gray-600">Responses</th>
+						{#if configChunks().length > 0}
+							<th class="text-left px-4 py-3 font-medium text-gray-600">Chunks</th>
+						{/if}
 						<th class="text-left px-4 py-3 font-medium text-gray-600">Registered</th>
 					</tr>
 				</thead>
@@ -243,6 +287,31 @@
 							</td>
 							<td class="px-4 py-3 text-gray-600">{getName(p.registration_data)}</td>
 							<td class="px-4 py-3 text-gray-600">{p.responseCount}</td>
+							{#if configChunks().length > 0}
+								{@const progress = getParticipantChunkProgress(p.id)}
+								{@const nextUrl = getNextChunkUrl(p.id)}
+								{@const onBreak = isBreakRequired(p.id)}
+								<td class="px-4 py-3">
+									<div class="flex items-center gap-1 flex-wrap">
+										{#each configChunks() as chunk, i}
+											{@const cp = progress?.[i]}
+											<span class="text-xs px-1.5 py-0.5 rounded font-mono {cp?.complete ? 'bg-green-100 text-green-700' : cp && cp.respondedCount > 0 ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-100 text-gray-400'}">
+												{chunk.slug} {#if cp?.complete}✓{:else if cp && cp.respondedCount > 0}{cp.respondedCount}/{cp.totalCount}{:else}–{/if}
+											</span>
+										{/each}
+									</div>
+									{#if nextUrl}
+										<div class="mt-1 flex items-center gap-1">
+											{#if onBreak}
+												<span class="text-xs text-amber-600">⏱ eligible {formatBreakTime(p.id)}</span>
+											{:else}
+												<a href={nextUrl} target="_blank" class="text-xs text-indigo-500 hover:text-indigo-700 font-mono truncate max-w-xs">{nextUrl}</a>
+												<button type="button" onclick={() => navigator.clipboard.writeText(location.origin + nextUrl)} class="text-xs text-gray-400 hover:text-gray-600 cursor-pointer shrink-0" title="Copy link">⎘</button>
+											{/if}
+										</div>
+									{/if}
+								</td>
+							{/if}
 							<td class="px-4 py-3 text-gray-500">{formatDate(p.registered_at)}</td>
 						</tr>
 					{/each}

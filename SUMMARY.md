@@ -2,8 +2,8 @@
 
 > **Purpose**: This document is written for AI agents. It contains everything needed to understand, navigate, and continue development on this project without prior context.
 >
-> **Last updated**: 2026-03-22
-> **Build status**: 0 type errors, production build succeeds (`npx svelte-check` passes, `npm run build` succeeds)
+> **Last updated**: 2026-03-24
+> **Build status**: 0 type errors, production build succeeds (`npx svelte-check` passes, `npm run build` succeeds). 46 unit tests passing (`npm run test`).
 > **Deployed**: Vercel (using `@sveltejs/adapter-vercel`)
 
 ---
@@ -116,7 +116,7 @@ SUPABASE_SERVICE_ROLE_KEY=<service role key>
 
 ```sql
 experiments     (id UUID PK, slug TEXT UNIQUE, status TEXT CHECK(draft|active|paused|archived), config JSONB, created_by UUID, created_at, updated_at)
-participants    (id UUID PK, experiment_id UUID FK, email TEXT, registration_data JSONB, session_token UUID UNIQUE NOT NULL, registered_at)
+participants    (id UUID PK, experiment_id UUID FK, email TEXT, registration_data JSONB, session_token UUID UNIQUE NOT NULL, chunk_assignments JSONB DEFAULT '{}', registered_at)
                 UNIQUE(experiment_id, email)
 responses       (id UUID PK, experiment_id UUID FK, participant_id UUID FK, phase_id TEXT, stimulus_id TEXT, response_data JSONB, response_index INT DEFAULT 0, created_at, updated_at)
 file_uploads    (id UUID PK, response_id UUID FK, experiment_id UUID FK, participant_id UUID FK, widget_id TEXT, storage_path TEXT, file_type TEXT, file_size INT, created_at)
@@ -130,7 +130,7 @@ response_flat   -- Joins responses + experiments + participants for CSV export
                 -- Columns: id, experiment_slug, participant_email, participant_name, phase_id, stimulus_id, response_data, response_index, created_at, updated_at
 ```
 
-### RLS Policy Evolution (5 migrations)
+### RLS Policy Evolution (8 migrations)
 
 | Migration | What Changed |
 |-----------|-------------|
@@ -141,6 +141,7 @@ response_flat   -- Joins responses + experiments + participants for CSV export
 | `005_remove_anon_select.sql` | Drops anon SELECT on `participants`, `responses`, `file_uploads`. Only `experiments` remains anon-readable. All sensitive data reads are now server-side via service role key |
 | `006_fix_view_security.sql` | Recreates `response_flat` view with `security_invoker = true` (was implicitly SECURITY DEFINER, flagged by Supabase) |
 | `007_experiment_versions.sql` | Adds `experiment_config_versions` table for config history tracking (id, experiment_id FK, version_number INT, config JSONB, created_at) |
+| `008_chunk_assignments.sql` | Adds `chunk_assignments JSONB DEFAULT '{}'` column to `participants` for latin square block order persistence |
 
 ### Current Security Model Summary
 
@@ -152,7 +153,7 @@ response_flat   -- Joins responses + experiments + participants for CSV export
 
 ## 6. Experiment Config Schema
 
-The config is the central data structure. Full Zod schema: `src/lib/config/schema.ts` (224 lines).
+The config is the central data structure. Full Zod schema: `src/lib/config/schema.ts`.
 
 ```
 ExperimentConfig
@@ -177,6 +178,8 @@ ExperimentConfig
 │       ├── options: [{ value, label, showConditionalField? }]?
 │       └── conditionalOn: { field, value }?    # Show only if another field has specific value
 ├── tutorial: TutorialConfig | null
+│   ├── allowSkip: boolean?
+│   ├── introduction?: { title, body, buttonText? }    # Optional intro page before tutorial
 │   ├── welcome: { title, body, buttonText }
 │   ├── steps: TutorialStep[]
 │   │   ├── id, targetSelector (CSS selector), title, body: LocalizedString
@@ -200,6 +203,12 @@ ExperimentConfig
 │   ├── stimulusOrder: "sequential" | "random" | "random-per-participant"
 │   ├── allowRevisit: boolean (default true)
 │   ├── allowMultipleResponses: boolean (default false)
+│   ├── skipRules: SkipRule[]?              # Skip stimuli based on prior response values
+│   │   ├── targetStimulusId: string
+│   │   └── condition: { stimulusId, widgetId, operator: "equals"|"not_equals", value }
+│   ├── branchRules: BranchRule[]?          # Navigate to non-sequential next phase on completion
+│   │   ├── condition: { widgetId, stimulusId?, operator: "equals"|"not_equals", value }
+│   │   └── nextPhaseSlug: string
 │   └── completion: PhaseCompletion
 │       ├── title, body: LocalizedString
 │       ├── nextPhaseButton: LocalizedString?   # If absent, falls back to i18n key
@@ -208,10 +217,22 @@ ExperimentConfig
 │   ├── type: "video" | "image" | "audio" | "text" | "mixed"
 │   ├── source: "upload" | "external-urls" | "supabase-storage" (default)
 │   ├── storagePath: string?
-│   └── items: StimulusItem[]
-│       ├── id, type?, url?, filename?
-│       ├── label: LocalizedString?
-│       └── metadata: Record<string, any>?
+│   ├── items: StimulusItem[]
+│   │   ├── id, type?, url?, filename?
+│   │   ├── label: LocalizedString?
+│   │   └── metadata: Record<string, any>?
+│   └── chunking?: ChunkingConfig
+│       ├── enabled: boolean (default false)
+│       ├── blockOrder: "sequential" | "latin-square" | "random-per-participant"
+│       ├── withinBlockOrder: "sequential" | "random" | "random-per-participant"
+│       ├── breakScreen?: BreakScreen       # Shown between blocks
+│       │   ├── title, body: LocalizedString
+│       │   └── duration?: number           # Seconds before "Continue" button activates
+│       └── chunks: ChunkConfig[]
+│           ├── id, slug (regex validated), label?: LocalizedString
+│           └── blocks: BlockConfig[]
+│               ├── id, label?: LocalizedString
+│               └── stimulusIds: string[]
 └── completion?
     ├── title, body: LocalizedString
     ├── redirectUrl: string?
@@ -229,10 +250,15 @@ ExperimentConfig
 | `number` | `<input type="number">` | `min`, `max`, `step` | `{widgetId}: "value"` |
 | `likert` | Row of clickable number buttons | `min`, `max`, `minLabel`, `maxLabel` | `{widgetId}: "3"` |
 | `slider` | `<input type="range">` with labels | `min`, `max`, `step`, `minLabel`, `maxLabel` | `{widgetId}: "value"` |
-| `timestamp-range` | Two buttons capturing `mediaElement.currentTime` | `captureStartLabel`, `captureEndLabel` | `{widgetId}_start: "1.23"`, `{widgetId}_end: "4.56"` |
+| `timestamp-range` | Two buttons capturing `mediaElement.currentTime` | `captureStartLabel`, `captureEndLabel`, `timestampReviewMode` | `{widgetId}_start: "1.23"`, `{widgetId}_end: "4.56"` |
 | `audio-recording` | MediaRecorder with record/stop/playback/delete | `maxDurationSeconds`, `maxFileSizeMB` | `{widgetId}: "storage/path.webm"` |
 
-**Timestamp-range storage detail**: The widget internally uses a comma-separated string `"start,end"` that gets split on save into two separate keys: `{widgetId}_start` and `{widgetId}_end`. On review, `ReviewItemDisplay` detects these pairs and shows a replay button.
+All `ResponseWidget` types share common optional fields:
+- `conditionalOn: { widgetId, value }?` — show this widget only when another widget in the same phase has the given value; hidden widgets are excluded from required-field validation and saved as `null`
+- `stepNumber: number?`, `stepLabel: LocalizedString?` — for multi-step visual grouping
+- `placeholder: LocalizedString?` — hint text for text/textarea/number widgets
+
+**Timestamp-range storage detail**: The widget internally uses a comma-separated string `"start,end"` that gets split on save into two separate keys: `{widgetId}_start` and `{widgetId}_end`. On review, `ReviewItemDisplay` detects these pairs and shows a replay button. The `timestampReviewMode` config (`segment` or `full-highlight`) adds a Review button during data collection that replays the captured segment using the shared replay controller (`src/lib/utils/replay.ts`).
 
 ### Stimulus Naming Convention
 
@@ -262,7 +288,7 @@ experiment-platform/
 │   ├── seed.js                           # Upsert config JSON into experiments table
 │   ├── upload-test-videos.js             # Upload first 3 videos to Supabase Storage
 │   └── upload-all-videos.js              # Upload all 144 videos with progress bar
-├── supabase/migrations/                  # 7 SQL migration files (see section 5)
+├── supabase/migrations/                  # 8 SQL migration files (see section 5)
 ├── src/
 │   ├── app.css                           # Tailwind import + custom styles (buttons, spinner, modal, message)
 │   ├── app.d.ts                          # App.Locals: { sessionToken: string|null, adminUser: {id,email,role}|null }
@@ -271,7 +297,8 @@ experiment-platform/
 │   ├── lib/
 │   │   ├── index.ts                      # Empty placeholder for $lib alias
 │   │   ├── config/
-│   │   │   └── schema.ts                 # Full Zod schema (224 lines) + all type exports
+│   │   │   ├── schema.ts                 # Full Zod schema + all type exports (incl. ChunkingConfig, BlockConfig)
+│   │   │   └── schema.test.ts            # 46 unit tests for schema validation (incl. conditionalOn, skipRules, branchRules, breakScreen)
 │   │   ├── i18n/
 │   │   │   ├── index.svelte.ts           # I18nStore class: platform() + localized()
 │   │   │   └── platform/
@@ -280,7 +307,7 @@ experiment-platform/
 │   │   ├── server/
 │   │   │   ├── supabase.ts              # Service role client singleton (getServerSupabase())
 │   │   │   ├── cookies.ts               # Shared COOKIE_OPTIONS (httpOnly, sameSite lax, secure)
-│   │   │   ├── data.ts                  # Participant/response CRUD + file upload (142 lines)
+│   │   │   ├── data.ts                  # Participant/response CRUD + file upload + chunk assignments
 │   │   │   └── admin.ts                 # Admin CRUD + data export + versioning (313 lines)
 │   │   ├── services/
 │   │   │   ├── supabase.ts              # Anon client (browser-safe, used minimally)
@@ -290,10 +317,13 @@ experiment-platform/
 │   │   │   ├── participant.svelte.ts    # ParticipantStore: current user, isAuthenticated
 │   │   │   └── responses.svelte.ts      # ResponseStore: list, currentIndex, completedStimuli, byStimulus
 │   │   ├── utils/
-│   │   │   └── index.ts                 # obtainDate() helper
+│   │   │   ├── index.ts                 # obtainDate(), seededShuffle(), latinSquareOrder()
+│   │   │   ├── index.test.ts            # 15 tests for seededShuffle + latinSquareOrder
+│   │   │   ├── replay.ts               # Shared replay controller (replaySegment, replayFullWithHighlight, cleanup)
+│   │   │   └── replay.test.ts           # 12 tests for replay controller
 │   │   └── components/
 │   │       ├── admin/
-│   │       │   ├── ConfigEditor.svelte       # Full form editor for experiment config (~620 lines)
+│   │       │   ├── ConfigEditor.svelte       # Full form editor for experiment config (~1695 lines)
 │   │       │   ├── FormSection.svelte        # Collapsible section with open/close toggle
 │   │       │   └── LocalizedInput.svelte     # Multi-language text/textarea input
 │   │       ├── layout/
@@ -359,6 +389,9 @@ experiment-platform/
 │           │   │   └── +server.ts             # POST: save response (validates session server-side)
 │           │   └── upload/
 │           │       └── +server.ts             # POST: upload audio file to Supabase Storage
+│           ├── c/[chunkSlug]/[phaseSlug]/     # Chunked phase route
+│           │   ├── +page.server.ts            # Block order (latin square/random), orderedStimulusIds, blockBoundaries, breakScreen
+│           │   └── +page.svelte               # Thin wrapper importing phase page component
 │           └── survey/                        # Legacy endpoints (duplicates of [phaseSlug] endpoints)
 │               ├── save/+server.ts
 │               └── upload/+server.ts
@@ -473,6 +506,7 @@ The form-based config editor (~620 lines) provides editable UI for the entire JS
 | `findParticipantByEmail(experimentId, email)` | Login: find existing participant. Returns with `session_token` |
 | `getParticipantByToken(sessionToken)` | Session validation: verify httpOnly cookie |
 | `createParticipant(experimentId, email, registrationData)` | Registration: create participant, DB generates `session_token` |
+| `rotateSessionToken(participantId)` | Generates and saves a new UUID session token; called on every login |
 | `loadResponses(experimentId, participantId, phaseId?)` | Load all responses, optionally filtered by phase |
 | `saveResponse(experimentId, participantId, phaseId, stimulusId, responseData, responseIndex)` | Append-only INSERT |
 | `uploadFile(bucket, path, file, contentType, experimentId)` | Upload audio to Storage (validates type, size, path) |
@@ -578,7 +612,14 @@ In-memory sliding window per client IP:
 
 - SvelteKit form actions have built-in CSRF protection
 - API endpoints (`+server.ts`) verify `Origin` header matches app origin on POST/PUT/DELETE
+- In production, empty `Origin` header is also blocked (requests must include Origin)
 - Cross-origin requests are blocked with 403
+
+### Session Security
+
+- **Token rotation**: `rotateSessionToken()` in `data.ts` generates a new UUID on every login and updates the DB. The browser always receives a fresh token.
+- **Registration validation**: The auth endpoint validates all required registration fields against `config.registration.fields` (respecting `conditionalOn` visibility) and returns 400 for missing required fields.
+- **Response validation**: The save endpoint validates `phaseId` (must exist in config), `stimulusId` (must exist in `stimuli.items`), and `responseData` keys (must match the phase's `responseWidgets[].id`). Returns 400 on mismatch.
 
 ### Error Messages
 
@@ -741,23 +782,68 @@ In Svelte 5, `{@const}` must be an **immediate child** of `{#each}`, `{#if}`, `{
 - **Audio listener leak fixed**: `ReviewItemDisplay.svelte` — stacked `timeupdate` listeners on replay now cleared via `activeTimeUpdateListener` tracking
 - **Rate limiter serverless caveat documented**: Comment added in `hooks.server.ts`
 
+### Phase 6.7: Bug Fixes & Minor Features (2026-03-24)
+
+- **`allowRevisit` fix**: `<StimulusNav>` hidden entirely when `allowRevisit=false` (was silently blocking clicks)
+- **Admin form field additions**: Placeholder, Default Value, showConditionalField (registration); Step Number, Step Label, Placeholder (widgets); Type override, Label (stimuli items); Sample Stimuli checkboxes, Introduction page (tutorial); Review Mode (timestamp-range)
+- **Timestamp review button**: Shared replay controller (`src/lib/utils/replay.ts`), Review button on timestamp-range widgets
+- **Tutorial introduction page**: Optional intro before tutorial welcome modal
+
+### Security Hardening (2026-03-24)
+
+- **CSRF tightened**: Production now blocks empty `Origin` header (not just wrong Origin)
+- **Session token rotation**: `rotateSessionToken()` called on every login; fresh token every session
+- **Registration validation**: Server validates required fields in auth endpoint against config schema
+- **Response validation**: Save endpoint validates phaseId, stimulusId, and widget key names against config
+
+### Phase 8.3: Conditional Logic (2026-03-24)
+
+- **Conditional widget visibility**: `conditionalOn: { widgetId, value }` on `ResponseWidget`; `isWidgetVisible()` in phase page; hidden widgets excluded from validation and saved as `null`; admin UI toggle + widget dropdown + value input
+- **Skip stimuli**: `SkipRule` schema; async `advanceToNext()` evaluates rules and calls `autoSkipStimulus()` (saves `_skipped_by_rule` response for all widgets); admin UI with target/source stimulus + widget + operator + value dropdowns
+- **Branching phases**: `BranchRule` schema; `resolveNextPhase()` + `evaluateBranchCondition()` in phase page; first matching rule wins, fallback sequential; admin UI with condition + target phase dropdowns
+
+### Phase 8.4: Break Screens + Block Completion (2026-03-24)
+
+- **Break screens**: `BreakScreen` schema in `ChunkingConfig`; modal with countdown timer appears when crossing block boundaries; admin UI in ChunkingSection
+- **Block boundaries**: Chunked route server (`c/[chunkSlug]/[phaseSlug]/+page.server.ts`) computes and returns `blockBoundaries[]` with start/end indices per block
+- **Block progress display**: "Block 2/5 — 3/10 completed" shown below progress bar on chunked phases
+- **Admin UI**: Break screen title/body/duration config in ChunkingSection
+
+### Performance: Admin Pagination (2026-03-24)
+
+- **StimuliSection pagination**: 20 items per page with prev/next controls; search/filter by ID, filename, or URL; item indices always reference the full array for correct `update()` calls
+- Pagination only shown when items count > 20 (no UI clutter for small experiments)
+
+### Tests (2026-03-24)
+
+- **46 schema tests** in `schema.test.ts` (was 13): added `conditionalOn`, `skipRules` (with/without stimulusId), `branchRules`, `breakScreen` (with/without duration), `allowRevisit`, `stepNumber/stepLabel`, `placeholder/defaultValue`, `chunking`
+- **15 seededShuffle + latinSquareOrder tests** in `utils/index.test.ts`
+- **12 replay controller tests** in `utils/replay.test.ts`
+
 ---
 
 ## 15. What Is Left To Do
 
 ### Known Gaps
-- **No test suite**: No unit, integration, or E2E tests exist (Phase 7)
-- **No pagination**: Experiment list, participants list, CSV export all load everything at once (Phase 10)
-- **a11y warnings**: Some labels not associated with controls in ConfigEditor (non-blocking, Phase 7)
 - **Serverless rate limiting**: In-memory rate limiter resets on cold starts; needs Redis/Upstash for Vercel
+- **No E2E tests**: Unit tests exist (46); Playwright E2E tests not yet set up (Phase 7.1)
+- **No i18n store tests**: `platform()` lookup + interpolation, `localized()` fallback — still TODO (Phase 7.1)
+- **No response store tests**: `completedStimuli` and `byStimulus` computed maps — still TODO (Phase 7.1)
+- **a11y warnings**: Some labels not associated with controls in ConfigEditor (non-blocking, Phase 7.3)
+- **No pagination**: Experiment list and participants list load everything at once (Phase 10.2)
+- **Database backups**: Supabase automated backups not yet configured (pre-launch checklist)
+- **Pilot testing**: 5-10 participants through full flow not yet done (Phase 5.5)
 
 ### Potential Future Features (see `FUTUR_PLAN.md` for full roadmap)
-- Stimuli management UI (upload, reorder, preview, drag-and-drop)
-- More widget types (image annotation, ranking, matrix)
-- Bulk participant operations (re-open completed phases)
-- Inter-rater reliability calculations
-- Multi-experiment aggregation views
-- Participant quotas and condition assignment
+- More widget types: image annotation, ranking/sorting, matrix/grid, comparison (Phase 8.1)
+- More stimulus types: audio stimuli player, rich text, multi-stimulus A/B (Phase 8.2)
+- Participant quotas and condition assignment (Phase 8.5)
+- In-app analytics dashboard: response distributions, completion funnel (Phase 9.1)
+- Inter-rater reliability calculations (Phase 9.2)
+- Multi-experiment aggregation views (Phase 9.3)
+- Multi-tenant / team support with role-based permissions (Phase 10.1)
+- Audio file bulk download as ZIP (Phase 6.4, deferred)
+- Sentry error monitoring (Phase 5b)
 
 ---
 

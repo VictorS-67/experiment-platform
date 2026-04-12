@@ -17,7 +17,8 @@
 		"optional": "optional",
 		"saved_responses": "Saved responses:",
 		"registering_as": "Registering as:",
-		"registering": "Registering..."
+		"registering": "Registering...",
+		"continue": "Continue"
 	},
 	"registration": {
 		"email_label": "Email address",
@@ -47,13 +48,22 @@
 		"completion_body": "You have completed all stimuli.",
 		"next_phase": "Continue to Next Phase",
 		"stay_on_page": "Stay on Page",
+		"finish_experiment": "Finish",
 		"continue": "Continue",
 		"no_response_saved": "No response saved for this item.",
-		"fill_in_required": "Please fill in: {field}"
+		"fill_in_required": "Please fill in: {field}",
+		"experiment_complete_title": "Thank you!",
+		"experiment_complete_body": "You have completed the experiment.",
+		"feedback_title": "We'd love your feedback",
+		"feedback_submit": "Submit Feedback",
+		"feedback_submitted": "Thank you for your feedback!",
+		"feedback_submitting": "Submitting...",
+		"response_summary_title": "Your Responses"
 	},
 	"tutorial": {
 		"progress": "Step",
 		"of": "of",
+		"continue": "Continue",
 		"begin": "Begin Tutorial",
 		"skip": "Skip Tutorial",
 		"next": "Next",
@@ -88,6 +98,7 @@
 	"timestamps": {
 		"start": "Get starting time",
 		"end": "Get ending time",
-		"not_set": "-.--"
+		"not_set": "-.--",
+		"review": "Review"
 	}
 }

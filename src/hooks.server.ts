@@ -1,5 +1,6 @@
 import type { Handle } from '@sveltejs/kit';
 import { PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY } from '$env/static/public';
+import { dev } from '$app/environment';
 import { createClient } from '@supabase/supabase-js';
 import { getServerSupabase } from '$lib/server/supabase';
 import { isRedirect, isHttpError, redirect, error } from '@sveltejs/kit';
@@ -59,9 +60,16 @@ export const handle: Handle = async ({ event, resolve }) => {
 			const origin = event.request.headers.get('origin');
 			const expectedOrigin = event.url.origin;
 
-			// In dev, also allow requests with no Origin header (e.g., curl, Postman)
-			if (origin && origin !== expectedOrigin) {
-				error(403, 'Cross-origin request blocked');
+			if (dev) {
+				// In dev, allow requests with no Origin header (e.g., curl, Postman)
+				if (origin && origin !== expectedOrigin) {
+					error(403, 'Cross-origin request blocked');
+				}
+			} else {
+				// In production, require Origin header to prevent CSRF
+				if (!origin || origin !== expectedOrigin) {
+					error(403, 'Cross-origin request blocked');
+				}
 			}
 		}
 	}

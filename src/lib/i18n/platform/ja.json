@@ -17,7 +17,8 @@
 		"optional": "任意",
 		"saved_responses": "保存済みの回答：",
 		"registering_as": "登録中：",
-		"registering": "登録中..."
+		"registering": "登録中...",
+		"continue": "続ける"
 	},
 	"registration": {
 		"email_label": "メールアドレス",
@@ -47,13 +48,22 @@
 		"completion_body": "すべての刺激を完了しました。",
 		"next_phase": "次のフェーズへ",
 		"stay_on_page": "このページに留まる",
+		"finish_experiment": "終了",
 		"continue": "続ける",
 		"no_response_saved": "この項目の回答は保存されていません。",
-		"fill_in_required": "入力してください：{field}"
+		"fill_in_required": "入力してください：{field}",
+		"experiment_complete_title": "ありがとうございました！",
+		"experiment_complete_body": "実験を完了しました。",
+		"feedback_title": "フィードバックをお願いします",
+		"feedback_submit": "フィードバックを送信",
+		"feedback_submitted": "フィードバックありがとうございます！",
+		"feedback_submitting": "送信中...",
+		"response_summary_title": "あなたの回答"
 	},
 	"tutorial": {
 		"progress": "ステップ",
 		"of": "/",
+		"continue": "続ける",
 		"begin": "チュートリアルを開始",
 		"skip": "チュートリアルをスキップ",
 		"next": "次へ",
@@ -88,6 +98,7 @@
 	"timestamps": {
 		"start": "開始時間を取得",
 		"end": "終了時間を取得",
-		"not_set": "-.--"
+		"not_set": "-.--",
+		"review": "再生確認"
 	}
 }

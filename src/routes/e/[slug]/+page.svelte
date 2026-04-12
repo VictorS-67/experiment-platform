@@ -17,6 +17,42 @@
 	let showForm = $state(false);
 	let loading = $state(false);
 	let message = $state<{ type: 'success' | 'error' | 'warning'; text: string } | null>(null);
+	let breakInfo = $state<{ canStartAt: string } | null>(null);  // set when participant must wait before next chunk
+	let pendingNextChunkUrl = $state<string | null>(null);  // stored from login response for use after break
+
+	// Live countdown for break enforcement
+	let breakSecondsLeft = $state(0);
+	let breakInterval: ReturnType<typeof setInterval> | undefined;
+
+	function startBreakCountdown(canStartAt: string) {
+		breakInfo = { canStartAt };
+		const updateCountdown = () => {
+			breakSecondsLeft = Math.max(0, Math.ceil((new Date(canStartAt).getTime() - Date.now()) / 1000));
+			if (breakSecondsLeft === 0 && breakInterval) {
+				clearInterval(breakInterval);
+				breakInterval = undefined;
+			}
+		};
+		updateCountdown();
+		if (breakSecondsLeft > 0) breakInterval = setInterval(updateCountdown, 1000);
+	}
+
+	function formatCountdown(seconds: number): string {
+		const m = Math.floor(seconds / 60);
+		const s = seconds % 60;
+		return m > 0 ? `${m}m ${s}s` : `${s}s`;
+	}
+
+	/** Returns the URL to send a participant to after login/registration */
+	function firstPhaseUrl(): string {
+		const firstPhase = config?.phases?.[0];
+		const phaseSlug = firstPhase?.slug ?? 'survey';
+		const chunking = config?.stimuli?.chunking;
+		if (chunking?.enabled && chunking.chunks?.length > 0) {
+			return `/e/${slug}/c/${chunking.chunks[0].slug}/${phaseSlug}`;
+		}
+		return `/e/${slug}/${phaseSlug}`;
+	}
 
 	async function handleEmailSubmit(e: Event) {
 		e.preventDefault();
@@ -55,9 +91,19 @@
 				};
 				responseStore.list = data.responses ?? [];
 
-				message = { type: 'success', text: i18n.platform('registration.welcome_back') };
-				const firstPhase = config?.phases?.[0];
-				await goto(`/e/${slug}/${firstPhase?.slug ?? 'survey'}`);
+				if (data.allChunksComplete) {
+					// Hard navigate — goto causes infinite loading via SvelteKit client-side state conflict
+					window.location.href = `/e/${slug}/complete`;
+					return;
+				} else if (data.breakRequired) {
+					// Participant must wait before starting next chunk
+					loading = false;
+					pendingNextChunkUrl = data.nextChunkUrl ?? null;
+					startBreakCountdown(data.breakRequired.canStartAt);
+				} else {
+					message = { type: 'success', text: i18n.platform('registration.welcome_back') };
+					await goto(data.nextChunkUrl ?? firstPhaseUrl());
+				}
 			} else {
 				// New participant — show registration form
 				loading = false;
@@ -92,7 +138,10 @@
 				body: JSON.stringify({ action: 'register', email, registrationData })
 			});
 
-			if (!res.ok) throw new Error('Registration request failed');
+			if (!res.ok) {
+				const errText = await res.text().catch(() => 'Registration request failed');
+				throw new Error(errText || 'Registration request failed');
+			}
 			const result = await res.json();
 
 			participantStore.current = {
@@ -106,10 +155,9 @@
 
 			message = { type: 'success', text: i18n.platform('registration.success_registered') };
 
-			const firstPhase = config.phases?.[0];
 			const destination = config.tutorial
 				? `/e/${slug}/tutorial`
-				: `/e/${slug}/${firstPhase?.slug ?? 'survey'}`;
+				: firstPhaseUrl();
 			await goto(destination);
 		} catch (err) {
 			const errorMsg = err instanceof Error ? err.message : 'Unknown error';
@@ -158,7 +206,31 @@
 				<div class="message {message.type}">{message.text}</div>
 			{/if}
 
-			{#if !showForm}
+			{#if breakInfo}
+				<!-- Break enforcement screen -->
+				<div class="text-center py-8">
+					<div class="inline-flex items-center justify-center w-16 h-16 bg-amber-100 rounded-full mb-4">
+						<svg class="w-8 h-8 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+						</svg>
+					</div>
+					<h2 class="text-lg font-semibold text-gray-800 mb-2">Time for a break!</h2>
+					<p class="text-gray-600 text-sm mb-6">You've completed a chunk. Please take a short break before continuing.</p>
+					{#if breakSecondsLeft > 0}
+						<p class="text-3xl font-mono font-bold text-indigo-600 mb-2">{formatCountdown(breakSecondsLeft)}</p>
+						<p class="text-sm text-gray-500">until your next chunk is available</p>
+					{:else}
+						<p class="text-sm text-green-600 font-medium mb-4">Your break is over — you can continue now!</p>
+						<button
+							type="button"
+							class="bg-indigo-600 text-white font-medium py-2 px-6 rounded hover:bg-indigo-700 transition-colors cursor-pointer"
+							onclick={() => { breakInfo = null; goto(pendingNextChunkUrl ?? firstPhaseUrl()); }}
+						>
+							Continue to next chunk →
+						</button>
+					{/if}
+				</div>
+			{:else if !showForm}
 				<!-- Email entry step -->
 				<form onsubmit={handleEmailSubmit} class="space-y-4">
 					<div>

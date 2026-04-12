@@ -1,6 +1,9 @@
 import type { LocalizedStringType } from '$lib/config/schema';
+import enTranslations from './platform/en.json';
 
 const translationCache = new Map<string, Record<string, unknown>>();
+// Pre-populate English so setLanguage('en') is always synchronous
+translationCache.set('en', enTranslations);
 
 async function loadPlatformTranslations(lang: string): Promise<Record<string, unknown>> {
 	if (translationCache.has(lang)) return translationCache.get(lang)!;
@@ -18,10 +21,15 @@ async function loadPlatformTranslations(lang: string): Promise<Record<string, un
 
 class I18nStore {
 	language = $state('en');
-	translations = $state<Record<string, unknown>>({});
+	translations = $state<Record<string, unknown>>(enTranslations);
 
 	async setLanguage(lang: string): Promise<void> {
 		this.language = lang;
+		// Use cached value synchronously if available (avoids flash of untranslated keys)
+		if (translationCache.has(lang)) {
+			this.translations = translationCache.get(lang)!;
+			return;
+		}
 		this.translations = await loadPlatformTranslations(lang);
 	}
 

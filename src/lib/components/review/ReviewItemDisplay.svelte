@@ -2,6 +2,7 @@
 	import type { ResponseRecord } from '$lib/services/data';
 	import type { StimuliConfigType, StimulusItemType } from '$lib/config/schema';
 	import StimulusRenderer from '$lib/components/stimuli/StimulusRenderer.svelte';
+	import { createReplayController } from '$lib/utils/replay';
 	import { i18n } from '$lib/i18n/index.svelte';
 
 	let {
@@ -19,20 +20,12 @@
 	} = $props();
 
 	let highlightActive = $state(false);
-	let activeTimeUpdateListener: (() => void) | null = null;
-
-	function clearActiveListener() {
-		if (activeTimeUpdateListener && mediaElement) {
-			mediaElement.removeEventListener('timeupdate', activeTimeUpdateListener);
-			activeTimeUpdateListener = null;
-		}
-	}
+	const controller = createReplayController();
 
 	// Parse response data into timestamps (values matching "number-number") and regular key-values
 	let parsed = $derived.by(() => {
 		const data = sourceResponse.response_data;
 		const timestamps: { widgetId: string; start: number; end: number }[] = [];
-		const timestampKeys = new Set<string>();
 		const regular: { key: string; val: unknown }[] = [];
 
 		for (const [key, val] of Object.entries(data)) {
@@ -40,7 +33,6 @@
 			if (typeof val === 'string' && /^\d+(\.\d+)?-\d+(\.\d+)?$/.test(val)) {
 				const [s, e] = val.split('-');
 				timestamps.push({ widgetId: key, start: parseFloat(s), end: parseFloat(e) });
-				timestampKeys.add(key);
 			} else {
 				regular.push({ key, val });
 			}
@@ -54,45 +46,14 @@
 		return `${m}:${s}`;
 	}
 
-	function replaySegment(start: number, end: number) {
-		if (!mediaElement) return;
-		clearActiveListener();
-		mediaElement.currentTime = start;
-		mediaElement.play();
-		function onTimeUpdate() {
-			if (mediaElement && mediaElement.currentTime >= end) {
-				mediaElement.pause();
-				clearActiveListener();
-			}
-		}
-		activeTimeUpdateListener = onTimeUpdate;
-		mediaElement.addEventListener('timeupdate', onTimeUpdate);
-	}
-
-	function replayFullWithHighlight(start: number, end: number) {
-		if (!mediaElement) return;
-		clearActiveListener();
-		highlightActive = false;
-		mediaElement.currentTime = 0;
-		mediaElement.play();
-		function onTimeUpdate() {
-			if (!mediaElement) return;
-			const t = mediaElement.currentTime;
-			highlightActive = t >= start && t <= end;
-			if (mediaElement.ended) {
-				highlightActive = false;
-				clearActiveListener();
-			}
-		}
-		activeTimeUpdateListener = onTimeUpdate;
-		mediaElement.addEventListener('timeupdate', onTimeUpdate);
-	}
-
 	function handleReplay(start: number, end: number) {
+		if (!mediaElement) return;
 		if (replayMode === 'full-highlight') {
-			replayFullWithHighlight(start, end);
+			controller.replayFullWithHighlight(mediaElement, start, end, (active) => {
+				highlightActive = active;
+			});
 		} else {
-			replaySegment(start, end);
+			controller.replaySegment(mediaElement, start, end);
 		}
 	}
 </script>

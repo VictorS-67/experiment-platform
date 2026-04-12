@@ -34,3 +34,15 @@ export function seededShuffle<T>(items: T[], seed: string): T[] {
 
 	return shuffled;
 }
+
+/**
+ * Latin square rotation: returns items in an order determined by participantIndex.
+ * Each participant sees a different cyclic permutation of the items.
+ * For N items, there are N distinct orderings (rows of a latin square).
+ */
+export function latinSquareOrder<T>(items: T[], participantIndex: number): T[] {
+	const n = items.length;
+	if (n === 0) return [];
+	const offset = ((participantIndex % n) + n) % n; // handle negative indices
+	return [...items.slice(offset), ...items.slice(0, offset)];
+}

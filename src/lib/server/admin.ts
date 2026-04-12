@@ -272,6 +272,45 @@ export async function getExperimentStats(experimentId: string) {
 	};
 }
 
+export async function getChunkProgress(
+	experimentId: string,
+	chunks: Array<{ slug: string; blocks: Array<{ stimulusIds: string[] }> }>,
+	minBreakMinutes?: number
+): Promise<Map<string, Array<{ slug: string; complete: boolean; respondedCount: number; totalCount: number; completedAt: string | null; canStartNextAt: string | null }>>> {
+	const supabase = getServerSupabase();
+	const { data: responses } = await supabase
+		.from('responses')
+		.select('participant_id, stimulus_id, created_at')
+		.eq('experiment_id', experimentId);
+
+	// Build: participantId → Map<stimulusId, latest created_at>
+	const byParticipant = new Map<string, Map<string, string>>();
+	for (const r of responses ?? []) {
+		if (!byParticipant.has(r.participant_id)) byParticipant.set(r.participant_id, new Map());
+		const existing = byParticipant.get(r.participant_id)!.get(r.stimulus_id);
+		if (!existing || r.created_at > existing) byParticipant.get(r.participant_id)!.set(r.stimulus_id, r.created_at);
+	}
+
+	const result = new Map<string, ReturnType<typeof getChunkProgress> extends Promise<Map<string, infer V>> ? V : never>();
+	for (const [participantId, respondedAt] of byParticipant) {
+		let prevCompletedAt: string | null = null;
+		const progress = chunks.map((chunk) => {
+			const allStimuli = chunk.blocks.flatMap((b) => b.stimulusIds);
+			const responded = allStimuli.filter((id) => respondedAt.has(id));
+			const complete = allStimuli.length > 0 && responded.length === allStimuli.length;
+			const timestamps = responded.map((id) => respondedAt.get(id)!).filter(Boolean);
+			const completedAt = complete && timestamps.length ? timestamps.sort().at(-1)! : null;
+			const canStartNextAt = prevCompletedAt && minBreakMinutes
+				? new Date(new Date(prevCompletedAt).getTime() + minBreakMinutes * 60 * 1000).toISOString()
+				: null;
+			if (complete && completedAt) prevCompletedAt = completedAt;
+			return { slug: chunk.slug, complete, respondedCount: responded.length, totalCount: allStimuli.length, completedAt, canStartNextAt };
+		});
+		result.set(participantId, progress);
+	}
+	return result;
+}
+
 export async function getResponseData(experimentId: string) {
 	const supabase = getServerSupabase();
 

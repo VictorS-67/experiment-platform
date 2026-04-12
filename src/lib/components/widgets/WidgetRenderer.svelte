@@ -7,12 +7,14 @@
 		widget,
 		value = $bindable(''),
 		mediaElement = null,
-		onAudioReady = null
+		onAudioReady = null,
+		onReplayRequest = null
 	}: {
 		widget: ResponseWidgetType;
 		value: string;
 		mediaElement?: HTMLMediaElement | null;
 		onAudioReady?: ((widgetId: string, blob: Blob | null) => void) | null;
+		onReplayRequest?: ((start: number, end: number, mode: 'segment' | 'full-highlight') => void) | null;
 	} = $props();
 
 	let label = $derived(i18n.localized(widget.label, widget.id));
@@ -135,6 +137,21 @@
 				<p class="text-xs text-gray-500 mt-1 text-center">{endTime}</p>
 			</div>
 		</div>
+		{#if widget.config?.timestampReviewMode && onReplayRequest}
+			{@const s = parseFloat(parts[0])}
+			{@const e = parseFloat(parts[1])}
+			{@const hasRange = !isNaN(s) && !isNaN(e)}
+			<div class="mt-2 text-center">
+				<button
+					type="button"
+					disabled={!hasRange}
+					onclick={() => { if (hasRange) onReplayRequest(s, e, widget.config!.timestampReviewMode!); }}
+					class="px-4 py-1.5 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+				>
+					{i18n.platform('timestamps.review')}
+				</button>
+			</div>
+		{/if}
 	{:else if widget.type === 'slider'}
 		{@const min = widget.config?.min ?? 0}
 		{@const max = widget.config?.max ?? 100}

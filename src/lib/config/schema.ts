@@ -64,6 +64,12 @@ const TutorialStep = z.object({
 });
 
 const TutorialConfig = z.object({
+	allowSkip: z.boolean().default(true),
+	introduction: z.object({
+		title: LocalizedString,
+		body: LocalizedString,
+		buttonText: LocalizedString.optional()
+	}).optional(),
 	welcome: z.object({
 		title: LocalizedString,
 		body: LocalizedString,
@@ -101,6 +107,7 @@ const WidgetConfig = z.object({
 	// For timestamp-range
 	captureStartLabel: LocalizedString.optional(),
 	captureEndLabel: LocalizedString.optional(),
+	timestampReviewMode: z.enum(['segment', 'full-highlight']).optional(),
 	// For audio-recording
 	maxDurationSeconds: z.number().optional(),
 	maxFileSizeMB: z.number().optional()
@@ -118,7 +125,11 @@ const ResponseWidget = z.object({
 	required: z.boolean().default(true),
 	stepNumber: z.number().optional(),
 	stepLabel: LocalizedString.optional(),
-	config: WidgetConfig.optional()
+	config: WidgetConfig.optional(),
+	conditionalOn: z.object({
+		widgetId: z.string(),
+		value: z.string()
+	}).optional()
 });
 
 // --- Phases ---
@@ -145,6 +156,26 @@ const PhaseCompletion = z.object({
 	stayButton: LocalizedString.optional()
 });
 
+const SkipRule = z.object({
+	targetStimulusId: z.string(),
+	condition: z.object({
+		stimulusId: z.string(),
+		widgetId: z.string(),
+		operator: z.enum(['equals', 'not_equals']).default('equals'),
+		value: z.string()
+	})
+});
+
+const BranchRule = z.object({
+	condition: z.object({
+		widgetId: z.string(),
+		stimulusId: z.string().optional(),
+		operator: z.enum(['equals', 'not_equals']).default('equals'),
+		value: z.string()
+	}),
+	nextPhaseSlug: z.string()
+});
+
 const PhaseConfig = z.object({
 	id: z.string(),
 	slug: z.string(),
@@ -160,6 +191,8 @@ const PhaseConfig = z.object({
 	stimulusOrder: z.enum(['sequential', 'random', 'random-per-participant']).default('sequential'),
 	allowRevisit: z.boolean().default(true),
 	allowMultipleResponses: z.boolean().default(false),
+	skipRules: z.array(SkipRule).optional(),
+	branchRules: z.array(BranchRule).optional(),
 	completion: PhaseCompletion
 });
 
@@ -174,13 +207,44 @@ const StimulusItem = z.object({
 	metadata: z.record(z.string(), z.any()).optional()
 });
 
+// --- Chunking & Blocks ---
+
+const BlockConfig = z.object({
+	id: z.string(),
+	label: LocalizedString.optional(),
+	stimulusIds: z.array(z.string())
+});
+
+const ChunkConfig = z.object({
+	id: z.string(),
+	slug: z.string().regex(/^[a-z0-9-]+$/),
+	label: LocalizedString.optional(),
+	blocks: z.array(BlockConfig)
+});
+
+const BreakScreen = z.object({
+	title: LocalizedString,
+	body: LocalizedString,
+	duration: z.number().optional()
+});
+
+const ChunkingConfig = z.object({
+	enabled: z.boolean().default(false),
+	chunks: z.array(ChunkConfig).default([]),
+	blockOrder: z.enum(['sequential', 'latin-square', 'random-per-participant']).default('sequential'),
+	withinBlockOrder: z.enum(['sequential', 'random', 'random-per-participant']).default('random-per-participant'),
+	breakScreen: BreakScreen.optional(),
+	minBreakMinutes: z.number().optional()  // minimum minutes between completing one chunk and starting the next
+});
+
 const StimuliConfig = z.object({
 	type: z.enum(['video', 'image', 'audio', 'text', 'mixed']),
 	source: z.enum(['upload', 'external-urls', 'supabase-storage']).default('supabase-storage'),
 	storagePath: z.string().optional(),
 	messageTemplate: z.string().optional(),
 	metadataKeys: z.array(z.string()).optional(),
-	items: z.array(StimulusItem)
+	items: z.array(StimulusItem),
+	chunking: ChunkingConfig.optional()
 });
 
 // --- Top-level ---
@@ -196,7 +260,8 @@ const CompletionConfig = z.object({
 	title: LocalizedString,
 	body: LocalizedString,
 	redirectUrl: z.string().optional(),
-	showSummary: z.boolean().optional()
+	showSummary: z.boolean().optional(),
+	feedbackWidgets: z.array(ResponseWidget).default([])
 });
 
 export const ExperimentConfigSchema = z.object({
@@ -217,6 +282,9 @@ export type ExperimentConfig = z.infer<typeof ExperimentConfigSchema>;
 export type RegistrationFieldType = z.infer<typeof RegistrationField>;
 export type ResponseWidgetType = z.infer<typeof ResponseWidget>;
 export type PhaseConfigType = z.infer<typeof PhaseConfig>;
+export type SkipRuleType = z.infer<typeof SkipRule>;
+export type BranchRuleType = z.infer<typeof BranchRule>;
+export type BreakScreenType = z.infer<typeof BreakScreen>;
 export type StimulusItemType = z.infer<typeof StimulusItem>;
 export type TutorialConfigType = z.infer<typeof TutorialConfig>;
 export type TutorialStepType = z.infer<typeof TutorialStep>;
@@ -225,3 +293,6 @@ export type FieldOptionType = z.infer<typeof FieldOption>;
 export type StimuliConfigType = z.infer<typeof StimuliConfig>;
 export type ReviewConfigType = z.infer<typeof ReviewConfig>;
 export type LocalizedStringType = z.infer<typeof LocalizedString>;
+export type ChunkingConfigType = z.infer<typeof ChunkingConfig>;
+export type ChunkConfigType = z.infer<typeof ChunkConfig>;
+export type BlockConfigType = z.infer<typeof BlockConfig>;

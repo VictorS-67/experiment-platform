@@ -31,10 +31,26 @@
 	let activeWidgets = $derived(firstPhase?.responseWidgets ?? []);
 
 	let mediaElement: HTMLMediaElement | undefined = $state(undefined);
-	// Always has a '' default for every widget id — never undefined
-	let widgetValues = $derived(
-		Object.fromEntries(activeWidgets.map(w => [w.id, '']))
-	);
+	let widgetValues = $state<Record<string, string>>({});
+	let showGatekeeper = $state(false);
+	let showWidgets = $state(false);
+
+	$effect(() => {
+		// Reset visibility when firstPhase changes
+		if (firstPhase?.gatekeeperQuestion) {
+			showGatekeeper = true;
+			showWidgets = false;
+		} else {
+			showGatekeeper = false;
+			showWidgets = true;
+		}
+		// Reset widget values
+		const defaults: Record<string, string> = {};
+		for (const w of activeWidgets) {
+			defaults[w.id] = '';
+		}
+		widgetValues = defaults;
+	});
 
 	// Initialize participant from server data
 	$effect(() => {
@@ -50,7 +66,12 @@
 	});
 
 	function handleTutorialComplete() {
-		goto(`/e/${slug}/${firstPhase?.slug ?? 'survey'}`);
+		const chunking = config?.stimuli?.chunking;
+		const phaseSlug = firstPhase?.slug ?? 'survey';
+		const destination = chunking?.enabled && chunking.chunks?.length > 0
+			? `/e/${slug}/c/${chunking.chunks[0].slug}/${phaseSlug}`
+			: `/e/${slug}/${phaseSlug}`;
+		goto(destination);
 	}
 
 	async function handleLogout() {
@@ -61,6 +82,17 @@
 		});
 		participantStore.current = null;
 		goto(`/e/${slug}`);
+	}
+
+	function handleGatekeeperYes() {
+		showGatekeeper = false;
+		showWidgets = true;
+	}
+
+	function handleGatekeeperNo() {
+		// In tutorial mode, No just resets back to the gatekeeper state
+		showGatekeeper = true;
+		showWidgets = false;
 	}
 
 	function handleAudioReady(_widgetId: string, _blob: Blob | null) {
@@ -92,7 +124,7 @@
 		</div>
 
 		<!-- Gatekeeper question (if phase has one) -->
-		{#if firstPhase.gatekeeperQuestion}
+		{#if showGatekeeper && firstPhase.gatekeeperQuestion}
 			<div class="mt-6 text-center">
 				<p class="text-sm font-medium mb-4">
 					{i18n.localized(firstPhase.gatekeeperQuestion.text)}
@@ -101,12 +133,14 @@
 					<button
 						id="gatekeeper-yes"
 						class="px-6 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors cursor-pointer"
+						onclick={handleGatekeeperYes}
 					>
 						{i18n.localized(firstPhase.gatekeeperQuestion.yesLabel, i18n.platform('common.yes'))}
 					</button>
 					<button
 						id="gatekeeper-no"
 						class="px-6 py-2 bg-gray-400 text-white rounded hover:bg-gray-500 transition-colors cursor-pointer"
+						onclick={handleGatekeeperNo}
 					>
 						{i18n.localized(firstPhase.gatekeeperQuestion.noLabel, i18n.platform('common.no'))}
 					</button>
@@ -115,23 +149,25 @@
 		{/if}
 
 		<!-- Response widgets -->
-		<div class="mt-6 space-y-2">
-			{#each activeWidgets as widget (widget.id)}
-				<WidgetRenderer
-					{widget}
-					value={widgetValues[widget.id]}
-					{mediaElement}
-					onAudioReady={handleAudioReady}
-				/>
-			{/each}
+		{#if showWidgets}
+			<div class="mt-6 space-y-2">
+				{#each activeWidgets as widget (widget.id)}
+					<WidgetRenderer
+						{widget}
+						value={widgetValues[widget.id] ?? ''}
+						{mediaElement}
+						onAudioReady={handleAudioReady}
+					/>
+				{/each}
 
-			<button
-				id="save-button"
-				class="w-full mt-4 bg-indigo-600 text-white font-medium py-2 px-4 rounded hover:bg-indigo-700 transition-colors cursor-pointer disabled:opacity-50"
-			>
-				{i18n.platform('common.save')}
-			</button>
-		</div>
+				<button
+					id="save-button"
+					class="w-full mt-4 bg-indigo-600 text-white font-medium py-2 px-4 rounded hover:bg-indigo-700 transition-colors cursor-pointer disabled:opacity-50"
+				>
+					{i18n.platform('common.save')}
+				</button>
+			</div>
+		{/if}
 	{:else}
 		<div class="flex justify-center items-center py-20">
 			<div class="spinner w-8 h-8"></div>

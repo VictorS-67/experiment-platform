@@ -6,6 +6,7 @@
 	import { responseStore } from '$lib/stores/responses.svelte';
 	import { i18n } from '$lib/i18n/index.svelte';
 	import { seededShuffle } from '$lib/utils';
+	import { createReplayController } from '$lib/utils/replay';
 	import Header from '$lib/components/layout/Header.svelte';
 	import ProgressBar from '$lib/components/layout/ProgressBar.svelte';
 	import StimulusNav from '$lib/components/layout/StimulusNav.svelte';
@@ -20,9 +21,17 @@
 
 	let config = $derived(experiment.config);
 	let slug = $derived($page.params.slug);
+	let chunkSlug = $derived((data as Record<string, unknown>).chunkSlug as string | undefined);
 	let phase = $derived(data.phase as PhaseConfigType);
 	let isReviewPhase = $derived(phase?.type === 'review');
 	let phaseSlug = $derived(phase?.slug ?? '');
+
+	/** Build a phase URL, chunk-aware if chunkSlug is present */
+	function phaseUrl(targetPhaseSlug: string) {
+		return chunkSlug
+			? `/e/${slug}/c/${chunkSlug}/${targetPhaseSlug}`
+			: `/e/${slug}/${targetPhaseSlug}`;
+	}
 
 	// Active widgets: review uses reviewConfig.responseWidgets, stimulus-response uses phase.responseWidgets
 	let activeWidgets: ResponseWidgetType[] = $derived(
@@ -33,6 +42,7 @@
 
 	// Items to navigate: stimuli items for stimulus-response, filtered source responses for review
 	// Applies stimulus ordering (sequential, random, random-per-participant)
+	// When orderedStimulusIds is provided (chunked route), use that ordering instead
 	let items = $derived.by(() => {
 		if (isReviewPhase && data.sourceResponses) {
 			let filtered = data.sourceResponses as ResponseRecord[];
@@ -45,6 +55,15 @@
 			return filtered;
 		}
 		const rawItems = config?.stimuli?.items ?? [];
+
+		// Chunked route: server already computed the ordered stimulus IDs
+		if (data.orderedStimulusIds) {
+			const itemMap = new Map(rawItems.map(s => [s.id, s]));
+			return (data.orderedStimulusIds as string[])
+				.map(id => itemMap.get(id))
+				.filter((s): s is typeof rawItems[number] => !!s);
+		}
+
 		const order = phase?.stimulusOrder ?? 'sequential';
 		if (order === 'random') {
 			return [...rawItems].sort(() => Math.random() - 0.5);
@@ -79,11 +98,27 @@
 	let audioBlobs = $state<Record<string, Blob>>({});
 	let showGatekeeper = $state(true);
 	let showWidgets = $state(false);
+	let showBreakScreen = $state(false);
+	let breakCountdown = $state(0);
+	let breakTimerInterval: ReturnType<typeof setInterval> | undefined = undefined;
 	let saving = $state(false);
 	let responsesLoaded = $state(false);
 	let message = $state<{ type: 'success' | 'error'; text: string } | null>(null);
 	let showCompletionModal = $state(false);
 	let completionModalShown = $state(false);
+	let highlightActive = $state(false);
+	const replayController = createReplayController();
+
+	function handleReplayRequest(start: number, end: number, mode: 'segment' | 'full-highlight') {
+		if (!mediaElement) return;
+		if (mode === 'full-highlight') {
+			replayController.replayFullWithHighlight(mediaElement, start, end, (active) => {
+				highlightActive = active;
+			});
+		} else {
+			replayController.replaySegment(mediaElement, start, end);
+		}
+	}
 
 	// Reset all state when phase changes (e.g. navigating from one phase to the next)
 	$effect(() => {
@@ -219,9 +254,10 @@
 	async function handleSave() {
 		if (!phase || !currentItem) return;
 
-		// Validate required widgets
+		// Validate required widgets (skip conditionally hidden ones)
 		for (const w of activeWidgets) {
 			if (!w.required) continue;
+			if (!isWidgetVisible(w)) continue;
 			if (w.type === 'timestamp-range') {
 				const [start, end] = (widgetValues[w.id] || '').split(',');
 				if (!start || !end) {
@@ -261,6 +297,11 @@
 			}
 
 			for (const w of activeWidgets) {
+				// Hidden widgets get null
+				if (!isWidgetVisible(w)) {
+					responseData[w.id] = null;
+					continue;
+				}
 				if (w.type === 'audio-recording') {
 					if (!audioBlobs[w.id] && !(responseData[w.id])) {
 						responseData[w.id] = null;
@@ -309,10 +350,69 @@
 		return existing ? existing.length : 0;
 	}
 
-	function advanceToNext() {
-		const nextIndex = responseStore.currentIndex + 1;
+	/** Check if a widget should be visible based on its conditionalOn config */
+	function isWidgetVisible(widget: ResponseWidgetType): boolean {
+		if (!widget.conditionalOn) return true;
+		return widgetValues[widget.conditionalOn.widgetId] === widget.conditionalOn.value;
+	}
+
+	function shouldSkipStimulus(item: unknown): boolean {
+		if (isReviewPhase || !phase?.skipRules?.length) return false;
+		const stimItem = item as StimulusItemType;
+		return phase.skipRules.some(rule => {
+			if (rule.targetStimulusId !== stimItem.id) return false;
+			const responses = responseStore.byStimulus.get(rule.condition.stimulusId);
+			if (!responses?.length) return false;
+			const lastResponse = responses[responses.length - 1];
+			const widgetValue = String(lastResponse.response_data[rule.condition.widgetId] ?? '');
+			return rule.condition.operator === 'equals'
+				? widgetValue === rule.condition.value
+				: widgetValue !== rule.condition.value;
+		});
+	}
+
+	async function autoSkipStimulus(item: unknown) {
+		const stimItem = item as StimulusItemType;
+		// Already has a response (from a previous skip or manual entry) — don't duplicate
+		if (responseStore.completedStimuli.has(stimItem.id)) return;
+		const responseData: Record<string, unknown> = {};
+		for (const w of activeWidgets) {
+			responseData[w.id] = '_skipped_by_rule';
+		}
+		try {
+			const res = await fetch(`/e/${slug}/${phaseSlug}/save`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					phaseId: phase.id,
+					stimulusId: stimItem.id,
+					responseData,
+					responseIndex: 0
+				})
+			});
+			if (res.ok) {
+				const saved = await res.json();
+				responseStore.list = [...responseStore.list, saved];
+			}
+		} catch (err) {
+			console.error('Failed to auto-skip stimulus:', err);
+		}
+	}
+
+	async function advanceToNext() {
+		let nextIndex = responseStore.currentIndex + 1;
+		// Skip stimuli that match skip rules
+		while (nextIndex < items.length && shouldSkipStimulus(items[nextIndex])) {
+			await autoSkipStimulus(items[nextIndex]);
+			nextIndex++;
+		}
 		if (nextIndex < items.length) {
-			responseStore.currentIndex = nextIndex;
+			// Show break screen when crossing block boundaries
+			if (breakScreen && isBlockBoundary(responseStore.currentIndex, nextIndex)) {
+				startBreakScreen(nextIndex);
+			} else {
+				responseStore.currentIndex = nextIndex;
+			}
 		} else {
 			checkCompletion();
 		}
@@ -338,6 +438,20 @@
 		if (allDone && navItems.length > 0) {
 			showCompletionModal = true;
 			completionModalShown = true;
+			// Start break countdown for next chunk if this is the last phase of the chunk
+			if (nextChunkUrl && !resolveNextPhase()) {
+				const minBreakMinutes = config?.stimuli?.chunking?.minBreakMinutes;
+				if (minBreakMinutes && minBreakMinutes > 0) {
+					nextChunkCountdownSecs = minBreakMinutes * 60;
+					nextChunkTimerInterval = setInterval(() => {
+						nextChunkCountdownSecs--;
+						if (nextChunkCountdownSecs <= 0) {
+							clearInterval(nextChunkTimerInterval);
+							nextChunkTimerInterval = undefined;
+						}
+					}, 1000);
+				}
+			}
 		}
 	}
 
@@ -361,6 +475,105 @@
 			}));
 		}
 		return config?.stimuli?.items ?? [];
+	}
+
+	function evaluateBranchCondition(condition: { widgetId: string; stimulusId?: string; operator: 'equals' | 'not_equals'; value: string }): boolean {
+		if (condition.stimulusId) {
+			const responses = responseStore.byStimulus.get(condition.stimulusId);
+			if (!responses?.length) return false;
+			const last = responses[responses.length - 1];
+			const val = String(last.response_data[condition.widgetId] ?? '');
+			return condition.operator === 'equals' ? val === condition.value : val !== condition.value;
+		}
+		for (const [, responses] of responseStore.byStimulus) {
+			if (!responses.length) continue;
+			const last = responses[responses.length - 1];
+			const val = String(last.response_data[condition.widgetId] ?? '');
+			const match = condition.operator === 'equals' ? val === condition.value : val !== condition.value;
+			if (match) return true;
+		}
+		return false;
+	}
+
+	function resolveNextPhase(): PhaseConfigType | undefined {
+		if (!config) return undefined;
+		const currentPhaseIndex = config.phases.findIndex(p => p.id === phase.id);
+		if (currentPhaseIndex < 0) return undefined;
+		if (phase.branchRules?.length) {
+			for (const rule of phase.branchRules) {
+				if (evaluateBranchCondition(rule.condition)) {
+					return config.phases.find(p => p.slug === rule.nextPhaseSlug);
+				}
+			}
+		}
+		return config.phases[currentPhaseIndex + 1];
+	}
+
+	// Block boundaries and break screen (chunked route only)
+	let blockBoundaries = $derived((data as Record<string, unknown>).blockBoundaries as { blockId: string; startIndex: number; endIndex: number; label?: Record<string, string> }[] | undefined);
+	let breakScreen = $derived((data as Record<string, unknown>).breakScreen as { title: Record<string, string>; body: Record<string, string>; duration?: number } | null | undefined);
+
+	let currentBlockInfo = $derived.by(() => {
+		if (!blockBoundaries) return null;
+		const idx = responseStore.currentIndex;
+		const block = blockBoundaries.find(b => idx >= b.startIndex && idx <= b.endIndex);
+		if (!block) return null;
+		const blockStimIds = items.slice(block.startIndex, block.endIndex + 1).map(s => (s as StimulusItemType).id);
+		const completed = blockStimIds.filter(id => responseStore.completedStimuli.has(id)).length;
+		return {
+			blockIndex: blockBoundaries.indexOf(block) + 1,
+			totalBlocks: blockBoundaries.length,
+			completed,
+			total: blockStimIds.length
+		};
+	});
+
+	/** Pending index to navigate to after break screen is dismissed */
+	let pendingBreakIndex = $state(-1);
+
+	// Next-chunk navigation (chunked route, last phase of chunk)
+	let nextChunkUrl = $derived.by(() => {
+		if (!chunkSlug || !config) return null;
+		const chunks = config.stimuli?.chunking?.chunks ?? [];
+		const idx = chunks.findIndex((c: { slug: string }) => c.slug === chunkSlug);
+		if (idx < 0 || idx >= chunks.length - 1) return null;
+		const nextChunk = chunks[idx + 1];
+		return `/e/${slug}/c/${nextChunk.slug}/${config.phases[0]?.slug ?? 'survey'}`;
+	});
+
+	let nextChunkCountdownSecs = $state(0);
+	let nextChunkTimerInterval: ReturnType<typeof setInterval> | undefined;
+
+	function isBlockBoundary(fromIndex: number, toIndex: number): boolean {
+		if (!blockBoundaries) return false;
+		const fromBlock = blockBoundaries.find(b => fromIndex >= b.startIndex && fromIndex <= b.endIndex);
+		const toBlock = blockBoundaries.find(b => toIndex >= b.startIndex && toIndex <= b.endIndex);
+		return !!fromBlock && !!toBlock && fromBlock.blockId !== toBlock.blockId;
+	}
+
+	function startBreakScreen(nextIndex: number) {
+		pendingBreakIndex = nextIndex;
+		showBreakScreen = true;
+		const duration = breakScreen?.duration;
+		if (duration && duration > 0) {
+			breakCountdown = duration;
+			breakTimerInterval = setInterval(() => {
+				breakCountdown--;
+				if (breakCountdown <= 0) {
+					clearInterval(breakTimerInterval);
+					breakTimerInterval = undefined;
+				}
+			}, 1000);
+		}
+	}
+
+	function dismissBreakScreen() {
+		showBreakScreen = false;
+		if (breakTimerInterval) { clearInterval(breakTimerInterval); breakTimerInterval = undefined; }
+		if (pendingBreakIndex >= 0) {
+			responseStore.currentIndex = pendingBreakIndex;
+			pendingBreakIndex = -1;
+		}
 	}
 
 	let navItems = $derived(getNavItems());
@@ -389,6 +602,12 @@
 		<!-- Progress -->
 		<ProgressBar current={completedCount} total={items.length} />
 
+		{#if currentBlockInfo}
+			<p class="text-xs text-gray-500 mt-1">
+				Block {currentBlockInfo.blockIndex}/{currentBlockInfo.totalBlocks} — {currentBlockInfo.completed}/{currentBlockInfo.total} completed
+			</p>
+		{/if}
+
 		<!-- Stimulus / Review item display -->
 		<div class="mt-4 mb-4">
 			{#if isReviewPhase}
@@ -400,21 +619,25 @@
 					bind:mediaElement
 				/>
 			{:else}
-				<StimulusRenderer
-					item={currentItem as StimulusItemType}
-					config={config.stimuli}
-					bind:mediaElement
-				/>
+				<div class="rounded-lg transition-all duration-200" class:ring-4={highlightActive} class:ring-indigo-500={highlightActive}>
+					<StimulusRenderer
+						item={currentItem as StimulusItemType}
+						config={config.stimuli}
+						bind:mediaElement
+					/>
+				</div>
 			{/if}
 		</div>
 
-		<!-- Item navigation -->
-		<StimulusNav
-			items={navItems as StimulusItemType[]}
-			activeId={currentItemId}
-			completionMap={responseStore.completedStimuli}
-			onselect={handleItemSelect}
-		/>
+		<!-- Item navigation (hidden when revisiting is disabled) -->
+		{#if isReviewPhase || phase.allowRevisit !== false}
+			<StimulusNav
+				items={navItems as StimulusItemType[]}
+				activeId={currentItemId}
+				completionMap={responseStore.completedStimuli}
+				onselect={handleItemSelect}
+			/>
+		{/if}
 
 		<!-- Existing responses for this item -->
 		{#if currentResponses.length > 0 && !isReviewPhase}
@@ -469,12 +692,15 @@
 			{#if showWidgets}
 				<div class="mt-6 space-y-2">
 					{#each activeWidgets as widget (widget.id)}
-						<WidgetRenderer
-							{widget}
-							bind:value={widgetValues[widget.id]}
-							{mediaElement}
-							onAudioReady={handleAudioReady}
-						/>
+						{#if isWidgetVisible(widget)}
+							<WidgetRenderer
+								{widget}
+								bind:value={widgetValues[widget.id]}
+								{mediaElement}
+								onAudioReady={handleAudioReady}
+								onReplayRequest={handleReplayRequest}
+							/>
+						{/if}
 					{/each}
 
 					<button
@@ -504,28 +730,68 @@
 			</div>
 		{/if}
 
+		<!-- Break screen modal (between blocks in chunked experiments) -->
+		{#if breakScreen}
+			<Modal show={showBreakScreen} title={i18n.localized(breakScreen.title)} onclose={dismissBreakScreen}>
+				<p class="text-gray-600 mb-4">{i18n.localized(breakScreen.body)}</p>
+				<button
+					class="w-full bg-indigo-600 text-white py-2 px-4 rounded hover:bg-indigo-700 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+					onclick={dismissBreakScreen}
+					disabled={breakCountdown > 0}
+				>
+					{breakCountdown > 0 ? `${i18n.platform('common.continue')} (${breakCountdown}s)` : i18n.platform('common.continue')}
+				</button>
+			</Modal>
+		{/if}
+
 		<!-- Completion modal -->
 		<Modal show={showCompletionModal} title={phase.completion ? i18n.localized(phase.completion.title) : i18n.platform('survey.completion_title')} onclose={() => { showCompletionModal = false; }}>
 			<p class="text-gray-600 mb-4">
 				{phase.completion ? i18n.localized(phase.completion.body) : i18n.platform('survey.completion_body')}
 			</p>
-			{@const currentPhaseIndex = config.phases.findIndex(p => p.id === phase.id)}
-			{@const nextPhase = currentPhaseIndex >= 0 ? config.phases[currentPhaseIndex + 1] : undefined}
+			{@const nextPhase = resolveNextPhase()}
 			<div class="flex gap-3">
 				{#if nextPhase}
+					<!-- Next phase within same chunk (or non-chunked) -->
 					<button
 						class="flex-1 bg-indigo-600 text-white py-2 px-4 rounded hover:bg-indigo-700 cursor-pointer"
-						onclick={() => { showCompletionModal = false; goto(`/e/${slug}/${nextPhase.slug}`); }}
+						onclick={() => { showCompletionModal = false; goto(phaseUrl(nextPhase.slug)); }}
 					>
 						{phase.completion?.nextPhaseButton ? i18n.localized(phase.completion.nextPhaseButton) : i18n.platform('survey.next_phase')}
 					</button>
+				{:else if nextChunkUrl}
+					<!-- Last phase of this chunk — next chunk button with optional countdown -->
+					{#if nextChunkCountdownSecs > 0}
+						{@const m = Math.floor(nextChunkCountdownSecs / 60)}
+						{@const s = nextChunkCountdownSecs % 60}
+						<button disabled class="flex-1 bg-indigo-300 text-white py-2 px-4 rounded cursor-not-allowed select-none">
+							Next chunk in {m > 0 ? `${m}m ` : ''}{s}s
+						</button>
+					{:else}
+						<button
+							class="flex-1 bg-indigo-600 text-white py-2 px-4 rounded hover:bg-indigo-700 cursor-pointer"
+							onclick={() => { showCompletionModal = false; goto(nextChunkUrl); }}
+						>
+							Start next chunk →
+						</button>
+					{/if}
+				{:else}
+					<!-- Last phase, last chunk (or no chunking) — finish experiment -->
+					<button
+						class="flex-1 bg-indigo-600 text-white py-2 px-4 rounded hover:bg-indigo-700 cursor-pointer"
+						onclick={() => { showCompletionModal = false; window.location.href = `/e/${slug}/complete`; }}
+					>
+						{phase.completion?.nextPhaseButton ? i18n.localized(phase.completion.nextPhaseButton) : i18n.platform('survey.finish_experiment')}
+					</button>
 				{/if}
-				<button
-					class="flex-1 bg-gray-200 text-gray-700 py-2 px-4 rounded hover:bg-gray-300 cursor-pointer"
-					onclick={() => { showCompletionModal = false; }}
-				>
-					{phase.completion?.stayButton ? i18n.localized(phase.completion.stayButton) : i18n.platform('survey.stay_on_page')}
-				</button>
+				{#if phase.allowRevisit !== false}
+					<button
+						class="flex-1 bg-gray-200 text-gray-700 py-2 px-4 rounded hover:bg-gray-300 cursor-pointer"
+						onclick={() => { showCompletionModal = false; }}
+					>
+						{phase.completion?.stayButton ? i18n.localized(phase.completion.stayButton) : i18n.platform('survey.stay_on_page')}
+					</button>
+				{/if}
 			</div>
 		</Modal>
 

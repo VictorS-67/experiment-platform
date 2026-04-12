@@ -1,17 +1,31 @@
 <script lang="ts">
 	import { page } from '$app/stores';
-	import { enhance } from '$app/forms';
+	import TopBar from '$lib/components/admin/TopBar.svelte';
 
 	let { data, children } = $props();
 	let adminUser = $derived(data.adminUser);
 
 	let isLoginPage = $derived($page.url.pathname === '/admin/login');
 
-	let navItems = [
-		{ href: '/admin/experiments', label: 'Experiments', icon: 'flask' }
-	];
+	// Build breadcrumb from URL
+	let breadcrumb = $derived.by(() => {
+		const path = $page.url.pathname;
+		const crumbs: { label: string; href: string }[] = [];
 
-	let currentPath = $derived($page.url.pathname);
+		// Inside an experiment?
+		const expMatch = path.match(/^\/admin\/experiments\/([^/]+)/);
+		if (expMatch && expMatch[1] !== 'new') {
+			// The experiment layout will handle its own breadcrumb via TopBar
+			// We just show a simple breadcrumb here
+			const expData = $page.data as Record<string, unknown>;
+			const exp = expData?.experiment as { slug?: string } | undefined;
+			if (exp?.slug) {
+				crumbs.push({ label: exp.slug, href: `/admin/experiments/${expMatch[1]}` });
+			}
+		}
+
+		return crumbs;
+	});
 </script>
 
 <svelte:head>
@@ -21,39 +35,10 @@
 {#if isLoginPage}
 	{@render children()}
 {:else}
-	<div class="min-h-screen flex bg-gray-50">
-		<!-- Sidebar -->
-		<aside class="w-56 bg-gray-900 text-gray-300 flex flex-col flex-shrink-0">
-			<div class="p-4 border-b border-gray-700">
-				<a href="/admin/experiments" class="text-white font-semibold text-lg">Admin</a>
-			</div>
-
-			<nav class="flex-1 p-3 space-y-1">
-				{#each navItems as item}
-					<a
-						href={item.href}
-						class="block px-3 py-2 rounded text-sm transition-colors {currentPath.startsWith(item.href) ? 'bg-gray-700 text-white' : 'hover:bg-gray-800 hover:text-white'}"
-					>
-						{item.label}
-					</a>
-				{/each}
-			</nav>
-
-			{#if adminUser}
-				<div class="p-4 border-t border-gray-700">
-					<p class="text-xs text-gray-400 mb-2 truncate">{adminUser.email}</p>
-					<form method="POST" action="/admin/login?/logout" use:enhance>
-						<button type="submit" class="text-xs text-gray-400 hover:text-white cursor-pointer">
-							Sign out
-						</button>
-					</form>
-				</div>
-			{/if}
-		</aside>
-
-		<!-- Main content -->
-		<main class="flex-1 overflow-auto">
+	<div class="min-h-screen flex flex-col bg-gray-50">
+		<TopBar {adminUser} {breadcrumb} />
+		<div class="flex-1 flex overflow-hidden">
 			{@render children()}
-		</main>
+		</div>
 	</div>
 {/if}

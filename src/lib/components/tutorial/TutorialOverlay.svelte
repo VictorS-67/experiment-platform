@@ -12,9 +12,9 @@
 		oncomplete: () => void;
 	} = $props();
 
-	type Phase = 'welcome' | 'steps' | 'completion';
+	type Phase = 'intro' | 'welcome' | 'steps' | 'completion';
 
-	let phase = $state<Phase>('welcome');
+	let phase = $state<Phase>(config.introduction ? 'intro' : 'welcome');
 
 	// Driver.js instance and validation state (not reactive — managed imperatively)
 	let driverInstance: ReturnType<typeof import('driver.js').driver> | null = null;
@@ -81,7 +81,21 @@
 				updateNextButtonState();
 			};
 			target.addEventListener('click', handler);
-			validationCleanup = () => target.removeEventListener('click', handler);
+			// Native video/audio controls (play button, seek bar) live in the browser's shadow UI
+			// and don't fire click events that bubble to the DOM. Listen to media events as a fallback.
+			const media = target.matches('video, audio')
+				? target
+				: target.querySelector('video, audio');
+			const mediaEvents = ['play', 'pause', 'seeking'] as const;
+			if (media) {
+				for (const ev of mediaEvents) media.addEventListener(ev, handler);
+			}
+			validationCleanup = () => {
+				target.removeEventListener('click', handler);
+				if (media) {
+					for (const ev of mediaEvents) media.removeEventListener(ev, handler);
+				}
+			};
 		} else if (validation.type === 'input') {
 			const handler = () => {
 				if (stepValidated) return;
@@ -178,6 +192,10 @@
 		driverInstance.drive();
 	}
 
+	function proceedFromIntro() {
+		phase = 'welcome';
+	}
+
 	function skip() {
 		oncomplete();
 	}
@@ -202,7 +220,20 @@
 	});
 </script>
 
-{#if phase === 'welcome'}
+{#if phase === 'intro' && config.introduction}
+	<div class="tutorial-overlay">
+		<div class="tutorial-modal">
+			<h2 class="text-xl font-semibold mb-3">{i18n.localized(config.introduction.title)}</h2>
+			<p class="text-gray-600 mb-6" style="white-space: pre-line;">{i18n.localized(config.introduction.body)}</p>
+			<button
+				class="w-full bg-indigo-600 text-white py-2 px-4 rounded hover:bg-indigo-700 cursor-pointer font-medium"
+				onclick={proceedFromIntro}
+			>
+				{i18n.localized(config.introduction.buttonText ?? {}, i18n.platform('tutorial.continue'))}
+			</button>
+		</div>
+	</div>
+{:else if phase === 'welcome'}
 	<div class="tutorial-overlay">
 		<div class="tutorial-modal">
 			<h2 class="text-xl font-semibold mb-3">{i18n.localized(config.welcome.title)}</h2>
@@ -214,12 +245,14 @@
 				>
 					{i18n.localized(config.welcome.buttonText, i18n.platform('tutorial.begin'))}
 				</button>
+			{#if config.allowSkip !== false}
 				<button
 					class="flex-1 bg-gray-200 text-gray-700 py-2 px-4 rounded hover:bg-gray-300 cursor-pointer"
 					onclick={skip}
 				>
-					{i18n.platform('tutorial.skip')}
+					{i18n.platform("tutorial.skip")}
 				</button>
+			{/if}
 			</div>
 		</div>
 	</div>
