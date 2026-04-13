@@ -28,7 +28,10 @@ previous_expe_data/
 .claude
 .vscode
 .bug_list.md
+.claudeignore
 
 # Data exports — contain PII / session tokens, never commit
 backup-*.json
 *.csv
+configs/
+supabase/.temp/
