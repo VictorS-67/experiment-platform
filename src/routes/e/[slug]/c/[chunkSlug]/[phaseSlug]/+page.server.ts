@@ -65,10 +65,17 @@ export const load: PageServerLoad = async ({ locals, parent, params }) => {
 	}
 
 	// Build the ordered stimulus IDs: iterate blocks in assignment order,
-	// then apply within-block ordering
+	// then apply within-block ordering.
+	//
+	// For `withinBlockOrder: 'random'` we generate one fresh seed per request
+	// and reuse it across all blocks on this page load — that way the shuffle
+	// is a proper Fisher-Yates permutation (not the biased Math.random()-0.5
+	// sort comparator it used to be) and is stable within the request, but
+	// changes on reload for fresh randomness.
 	const blockMap = new Map(chunk.blocks.map((b: { id: string; stimulusIds: string[]; label?: Record<string, string> }) => [b.id, b]));
 	const orderedStimulusIds: string[] = [];
 	const blockBoundaries: { blockId: string; startIndex: number; endIndex: number; label?: Record<string, string> }[] = [];
+	const requestRandomSeed = chunking.withinBlockOrder === 'random' ? crypto.randomUUID() : '';
 	let offset = 0;
 	for (const blockId of assignment.blockOrder) {
 		const block = blockMap.get(blockId);
@@ -77,7 +84,7 @@ export const load: PageServerLoad = async ({ locals, parent, params }) => {
 		if (chunking.withinBlockOrder === 'random-per-participant') {
 			blockStimuli = seededShuffle(blockStimuli, participant.id + blockId);
 		} else if (chunking.withinBlockOrder === 'random') {
-			blockStimuli = [...blockStimuli].sort(() => Math.random() - 0.5);
+			blockStimuli = seededShuffle(blockStimuli, requestRandomSeed + blockId);
 		}
 		blockBoundaries.push({ blockId, startIndex: offset, endIndex: offset + blockStimuli.length - 1, label: block.label });
 		orderedStimulusIds.push(...blockStimuli);

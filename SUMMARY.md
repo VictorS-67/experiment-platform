@@ -14,7 +14,7 @@ A **config-driven experiment/survey platform** for academic research data collec
 
 **Origin**: Generalizes a vanilla JS research app (`/Users/victor/projects/movement-to-onomatopoeia/`) that collected onomatopoeia responses to 144 point-light motion capture videos, using Google Sheets + Google Drive. This platform replaces that with a proper database-backed, multi-experiment system.
 
-**First experiment**: `movement-onomatopoeia` — participants watch point-light motion videos, write onomatopoeia, mark timestamps, and optionally record audio. Bilingual EN/JA. Config at `configs/movement-onomatopoeia.json` (144 stimuli, 3 response widgets, gatekeeper question, tutorial).
+**First experiment**: `movement-onomatopoeia` — participants watch point-light motion videos, write onomatopoeia, mark timestamps, and optionally record audio. Bilingual EN/JA. 144 stimuli, 3 response widgets, gatekeeper question, tutorial.
 
 **Two user roles**:
 - **Participants**: Register via email, complete multi-phase experiments (stimulus-response + review phases), record audio, annotate timestamps
@@ -26,7 +26,7 @@ A **config-driven experiment/survey platform** for academic research data collec
 
 | Layer | Technology | Version/Notes |
 |-------|-----------|---------------|
-| Framework | SvelteKit | v2.50+, `@sveltejs/adapter-auto` |
+| Framework | SvelteKit | v2.50+, `@sveltejs/adapter-vercel` |
 | UI | Svelte 5 | Runes API: `$state`, `$derived`, `$effect`, `$props`, `$bindable` |
 | Language | TypeScript | Strict mode, bundler moduleResolution |
 | Styling | Tailwind CSS | v4, via `@tailwindcss/vite` plugin |
@@ -276,14 +276,12 @@ All `ResponseWidget` types share common optional fields:
 experiment-platform/
 ├── .env.example                          # Template for environment variables
 ├── package.json                          # npm deps, scripts
-├── svelte.config.js                      # adapter-auto, no custom aliases
+├── svelte.config.js                      # adapter-vercel, no custom aliases
 ├── tsconfig.json                         # Strict, extends .svelte-kit/tsconfig
 ├── vite.config.ts                        # Plugins: tailwindcss() + sveltekit()
 ├── HANDOFF.md                            # Original handoff doc (from Phase 2)
 ├── SUMMARY.md                            # This file
-├── configs/
-│   ├── movement-onomatopoeia.json        # Primary experiment (144 stimuli, EN/JA)
-│   └── movement-description.json         # Secondary experiment config
+├── configs/                              # Local experiment JSON configs (gitignored)
 ├── scripts/
 │   ├── seed.js                           # Upsert config JSON into experiments table
 │   ├── upload-test-videos.js             # Upload first 3 videos to Supabase Storage
@@ -834,7 +832,7 @@ In Svelte 5, `{@const}` must be an **immediate child** of `{#each}`, `{#if}`, `{
 - **Database backups**: Supabase automated backups not yet configured (pre-launch checklist)
 - **Pilot testing**: 5-10 participants through full flow not yet done (Phase 5.5)
 
-### Potential Future Features (see `FUTUR_PLAN.md` for full roadmap)
+### Potential Future Features (see `FUTURE_PLANS.md` for full roadmap)
 - More widget types: image annotation, ranking/sorting, matrix/grid, comparison (Phase 8.1)
 - More stimulus types: audio stimuli player, rich text, multi-stimulus A/B (Phase 8.2)
 - Participant quotas and condition assignment (Phase 8.5)
@@ -858,7 +856,7 @@ Data from two experiments run on the original vanilla JS platform, stored in `pr
   - 74 rows with reasoning (review phase data, stored in same sheet)
   - 21 audio recordings in `previous_expe_data/audio/` (organized by participant folder)
 - **Name mapping**: `_Names.csv` — 144 rows mapping `new_name` (e.g., `4.mp4`) to `original_name` (e.g., `JP_01_contempt_1_M`)
-- **Config**: `configs/movement-onomatopoeia.json` (144 stimuli, 2 phases, gatekeeper, tutorial)
+- **Config**: 144 stimuli, 2 phases, gatekeeper, tutorial
 
 ### `mvt-description` → platform slug `movement-description`
 - **Participants**: 6 (IDs 0, 1, 3, 5, 7, 8 — sparse numbering), `_Participants.csv` — columns: participantId, email, name, age, gender, nativeLanguage, signUpDate (no movementPractice field)
@@ -936,5 +934,5 @@ node scripts/upload-all-videos.js
 | Admin experiment server actions | `src/routes/admin/experiments/[id]/+page.server.ts` |
 | CSV export endpoint | `src/routes/admin/experiments/[id]/data/export/+server.ts` |
 | Database migrations | `supabase/migrations/001-005_*.sql` |
-| Example experiment config | `configs/movement-onomatopoeia.json` |
+| Experiment configs (local) | `configs/` (gitignored) |
 | DB seeding script | `scripts/seed.js` |

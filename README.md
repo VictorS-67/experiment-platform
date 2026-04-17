@@ -78,17 +78,7 @@ SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 
 ### 3. Set up the database
 
-Run the SQL migrations in order against your Supabase project (via the SQL Editor in the Supabase dashboard or the Supabase CLI):
-
-```
-supabase/migrations/001_initial_schema.sql
-supabase/migrations/002_rls_policies.sql
-supabase/migrations/003_tighten_rls.sql
-supabase/migrations/004_session_security.sql
-supabase/migrations/005_remove_anon_select.sql
-supabase/migrations/006_fix_view_security.sql
-supabase/migrations/007_experiment_versions.sql
-```
+Run every SQL migration file in `supabase/migrations/` in numeric order against your Supabase project (via the SQL Editor in the Supabase dashboard or the Supabase CLI). Keep this up to date as new migrations are added.
 
 ### 4. Create an admin user
 
@@ -97,6 +87,12 @@ supabase/migrations/007_experiment_versions.sql
    ```sql
    INSERT INTO admin_users (user_id, role) VALUES ('<user-uuid>', 'admin');
    ```
+3. (Optional) Create a local `.credentials` file at the repo root with the admin email and password for local tooling / testing:
+   ```
+   email=you@example.com
+   password=your-password
+   ```
+   This file is gitignored and only used by local scripts and automated tests — never commit real credentials.
 
 ### 5. Seed an experiment (optional)
 
@@ -104,7 +100,7 @@ supabase/migrations/007_experiment_versions.sql
 node scripts/seed.js
 ```
 
-This upserts the config from `configs/movement-onomatopoeia.json` into the `experiments` table.
+This upserts a config JSON from the local `configs/` directory into the `experiments` table. (The `configs/` directory is gitignored — create your own config files locally.)
 
 If your experiment uses video stimuli in Supabase Storage:
 ```bash
@@ -143,9 +139,9 @@ src/
 ├── routes/
 │   ├── admin/                   # Admin dashboard routes
 │   └── e/[slug]/                # Participant-facing experiment routes
-configs/                         # Example experiment JSON configs
+configs/                         # Local experiment JSON configs (gitignored)
 scripts/                         # DB seeding + video upload scripts
-supabase/migrations/             # 6 SQL migration files
+supabase/migrations/             # Sequential SQL migration files (001-013)
 ```
 
 ---
@@ -186,7 +182,7 @@ Each experiment is defined by a single JSON object. Here's the high-level struct
 
 The full schema is defined in `src/lib/config/schema.ts` using Zod. The admin dashboard validates configs against this schema on every save.
 
-See `configs/movement-onomatopoeia.json` for a complete real-world example.
+See `docs/SCHEMA.md` for the full config schema reference.
 
 ### Participant Journey
 

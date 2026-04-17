@@ -17,6 +17,7 @@ Thumbs.db
 .env.*
 !.env.example
 !.env.test
+.vscode
 
 # Vite
 vite.config.js.timestamp-*
@@ -29,6 +30,7 @@ previous_expe_data/
 .vscode
 .bug_list.md
 .claudeignore
+FUTURE_PLANS.md
 
 # Data exports — contain PII / session tokens, never commit
 backup-*.json

@@ -1,6 +1,6 @@
 import type { Actions } from './$types';
 import { fail } from '@sveltejs/kit';
-import { updateExperiment, saveConfigVersion } from '$lib/server/admin';
+import { saveConfigWithVersion, ConfigConflictError } from '$lib/server/admin';
 import { ExperimentConfigSchema } from '$lib/config/schema';
 
 export const actions: Actions = {
@@ -8,6 +8,7 @@ export const actions: Actions = {
 		if (!locals.adminUser) return fail(401, { error: 'Unauthorized' });
 		const formData = await request.formData();
 		const configJson = formData.get('config') as string;
+		const expectedUpdatedAt = (formData.get('expectedUpdatedAt') as string | null) || undefined;
 
 		let parsed: unknown;
 		try {
@@ -23,10 +24,19 @@ export const actions: Actions = {
 		}
 
 		try {
-			await saveConfigVersion(params.id, result.data);
-			await updateExperiment(params.id, { config: result.data, slug: result.data.slug });
-			return { success: true };
+			const { updatedAt } = await saveConfigWithVersion(params.id, result.data, {
+				newSlug: result.data.slug,
+				expectedUpdatedAt
+			});
+			return { success: true, updatedAt };
 		} catch (err) {
+			if (err instanceof ConfigConflictError) {
+				return fail(409, {
+					error:
+						'Config was modified by another admin since you loaded this page. Reload to see their changes, then re-apply yours.',
+					conflict: true
+				});
+			}
 			return fail(500, { error: err instanceof Error ? err.message : 'Failed to save.' });
 		}
 	}

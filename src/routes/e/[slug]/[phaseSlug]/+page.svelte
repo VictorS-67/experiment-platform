@@ -26,6 +26,11 @@
 	let isReviewPhase = $derived(phase?.type === 'review');
 	let phaseSlug = $derived(phase?.slug ?? '');
 
+	// Stable seed for `stimulusOrder: 'random'`. Generated once per page mount
+	// and reset on phase navigation below, so the shuffle is deterministic
+	// within a visit (survives reactive re-runs) but different across visits.
+	let randomOrderSeed = $state(crypto.randomUUID());
+
 	/** Build a phase URL, chunk-aware if chunkSlug is present */
 	function phaseUrl(targetPhaseSlug: string) {
 		return chunkSlug
@@ -66,7 +71,7 @@
 
 		const order = phase?.stimulusOrder ?? 'sequential';
 		if (order === 'random') {
-			return [...rawItems].sort(() => Math.random() - 0.5);
+			return seededShuffle(rawItems, randomOrderSeed);
 		}
 		if (order === 'random-per-participant' && participantStore.current?.id) {
 			return seededShuffle(rawItems, participantStore.current.id + (phase?.id ?? ''));
@@ -133,6 +138,7 @@
 		message = null;
 		showGatekeeper = true;
 		showWidgets = false;
+		randomOrderSeed = crypto.randomUUID();
 	});
 
 	// Initialize from server-loaded data

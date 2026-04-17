@@ -2,6 +2,10 @@
 
 Config-driven experiment/survey platform for academic research. SvelteKit 5 + Supabase + Tailwind + Zod. One deployment serves unlimited experiments defined by JSON configs.
 
+## Coding Philosophy
+
+**Root-cause fixes, not band-aids.** When a bug surfaces, find the underlying cause and fix it there, even if the fix touches more files than the symptom. Avoid quick patches — special-case branches, suppressed warnings, `if this weird input then ...` guards — that mask the real problem and accumulate as scar tissue. If the proper fix is genuinely too large for the current change, document the trade-off explicitly in the commit message or a `# TODO:` rather than papering over it silently.
+
 ## Quick Commands
 
 ```bash
@@ -70,7 +74,7 @@ Must be an immediate child of `{#each}`, `{#if}`, `{:else}` blocks — not insid
 
 ## Context Guidance
 
-- **`configs/`**: Contains exported experiment JSON configs (stimulus lists, widget definitions). Don't read these unless explicitly asked — the schema in `src/lib/config/schema.ts` is the authoritative reference for config structure.
+- **`configs/`**: Local-only directory (gitignored) containing exported experiment JSON configs. The schema in `src/lib/config/schema.ts` is the authoritative reference for config structure.
 
 ## Documentation
 

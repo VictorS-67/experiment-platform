@@ -108,22 +108,54 @@ export async function deleteExperiment(id: string) {
 
 export async function saveConfigVersion(experimentId: string, config: unknown) {
 	const supabase = getServerSupabase();
-	// Get next version number
-	const { data } = await supabase
-		.from('experiment_config_versions')
-		.select('version_number')
-		.eq('experiment_id', experimentId)
-		.order('version_number', { ascending: false })
-		.limit(1)
-		.maybeSingle();
-
-	const nextVersion = (data?.version_number ?? 0) + 1;
-
-	const { error } = await supabase
-		.from('experiment_config_versions')
-		.insert({ experiment_id: experimentId, version_number: nextVersion, config });
-
+	const { error } = await supabase.rpc('insert_config_version', {
+		exp_id: experimentId,
+		cfg: config
+	});
 	if (error) { console.error('Failed to save config version:', error); throw new Error('Failed to save config version'); }
+}
+
+/**
+ * Atomic "save config" for the admin editor: inserts the next config version
+ * AND updates experiments.config in a single transaction (migration 014).
+ *
+ * If expectedUpdatedAt is provided, the server will reject the save with
+ * ConfigConflictError when the experiment row has been updated since then —
+ * that's the optimistic-lock check that prevents two admins from silently
+ * overwriting each other's edits.
+ */
+export class ConfigConflictError extends Error {
+	constructor() {
+		super('Config was modified by another admin since you loaded it.');
+		this.name = 'ConfigConflictError';
+	}
+}
+
+export async function saveConfigWithVersion(
+	experimentId: string,
+	config: unknown,
+	options: { newSlug?: string; expectedUpdatedAt?: string } = {}
+): Promise<{ versionNumber: number; updatedAt: string }> {
+	const supabase = getServerSupabase();
+	const { data, error } = await supabase.rpc('upsert_config_with_version', {
+		exp_id: experimentId,
+		cfg: config,
+		new_slug: options.newSlug ?? null,
+		expected_updated_at: options.expectedUpdatedAt ?? null
+	});
+
+	if (error) {
+		// Postgres error code P0004 → optimistic-lock conflict (see migration 014).
+		if ((error as { code?: string }).code === 'P0004') {
+			throw new ConfigConflictError();
+		}
+		console.error('Failed to save config:', error);
+		throw new Error('Failed to save config');
+	}
+
+	const row = Array.isArray(data) ? data[0] : data;
+	if (!row) throw new Error('Failed to save config: empty response');
+	return { versionNumber: row.version_number, updatedAt: row.updated_at };
 }
 
 export async function listConfigVersions(experimentId: string) {
@@ -149,8 +181,7 @@ export async function rollbackToVersion(experimentId: string, versionId: string)
 
 	if (error || !version) throw new Error('Version not found');
 
-	await updateExperiment(experimentId, { config: version.config as Record<string, unknown> });
-	await saveConfigVersion(experimentId, version.config);
+	await saveConfigWithVersion(experimentId, version.config);
 }
 
 export async function getParticipants(experimentId: string) {

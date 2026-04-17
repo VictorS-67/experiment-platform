@@ -179,21 +179,13 @@ export async function saveChunkAssignment(
 	blockOrder: string[]
 ): Promise<void> {
 	const supabase = getServerSupabase();
+	const assignment = { blockOrder, assignedAt: new Date().toISOString() };
 
-	// Read current assignments
-	const { data: current } = await supabase
-		.from('participants')
-		.select('chunk_assignments')
-		.eq('id', participantId)
-		.single();
-
-	const assignments = ((current?.chunk_assignments ?? {}) as Record<string, unknown>);
-	assignments[chunkSlug] = { blockOrder, assignedAt: new Date().toISOString() };
-
-	const { error } = await supabase
-		.from('participants')
-		.update({ chunk_assignments: assignments })
-		.eq('id', participantId);
+	const { error } = await supabase.rpc('set_chunk_assignment', {
+		p_id: participantId,
+		chunk_key: chunkSlug,
+		assignment
+	});
 
 	if (error) { console.error('Failed to save chunk assignment:', error); throw new Error('Failed to save chunk assignment'); }
 }

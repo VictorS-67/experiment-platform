@@ -20,6 +20,12 @@
 	let configJson = $state(JSON.stringify(data.experiment.config, null, 2));
 	let jsonError = $state<string | null>(null);
 
+	// Optimistic-locking token: the experiments.updated_at we saw when loading
+	// this page. Sent back on save so the server can reject with 409 if someone
+	// else saved the config in the meantime. `form?.updatedAt` wins over `data`
+	// because the action returns the fresh timestamp before the `data` reload.
+	let expectedUpdatedAt = $derived(form?.updatedAt ?? data.experiment.updated_at);
+
 	let saving = $state(false);
 
 	let toast = $state<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -130,6 +136,7 @@
 		action="?/saveConfig"
 		use:enhance={({ formData }) => {
 			formData.set('config', configJson);
+			formData.set('expectedUpdatedAt', expectedUpdatedAt);
 			saving = true;
 			return async ({ update }) => { await update({ reset: false }); saving = false; };
 		}}
@@ -160,6 +167,7 @@
 		action="?/saveConfig"
 		use:enhance={({ formData }) => {
 			formData.set('config', JSON.stringify(configState, null, 2));
+			formData.set('expectedUpdatedAt', expectedUpdatedAt);
 			saving = true;
 			return async ({ update }) => {
 				await update({ reset: false });
