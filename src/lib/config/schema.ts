@@ -1,10 +1,43 @@
 import { z } from 'zod';
 
-// Localized string: { en: "...", ja: "..." }
-const LocalizedString = z.record(z.string(), z.string());
-const LocalizedStringArray = z.record(z.string(), z.array(z.string()));
+// ---------------------------------------------------------------------------
+// Localized string
+// ---------------------------------------------------------------------------
+//
+// Restricted to the ISO 639-1 language codes the platform actually supports.
+// Tighter than the previous `z.record(z.string(), z.string())` which let any
+// key through (including typos like the `jn` we found in old configs and
+// fixed via the one-shot migrator at scripts/migrate-configs.js).
+//
+// To add a new language: extend this list AND add translations under
+// src/lib/i18n.
 
-// --- Registration ---
+export const LANGUAGE_CODES = [
+	'en', 'ja', 'fr', 'es', 'de', 'it', 'pt', 'ru', 'zh', 'ko',
+	'ar', 'hi', 'tr', 'vi', 'th', 'id', 'nl', 'pl', 'sv', 'da', 'no', 'fi'
+] as const;
+export type LanguageCode = (typeof LANGUAGE_CODES)[number];
+const LANGUAGE_CODE_SET: ReadonlySet<string> = new Set(LANGUAGE_CODES);
+
+// Note: we deliberately keep the key type as `string` (not `z.enum(LANGUAGE_CODES)`)
+// because Zod infers `z.record(z.enum(...), V)` as `Record<K, V>` requiring
+// EVERY enum value as a key — which would break every `{ en: 'foo' }` literal
+// in the codebase. The `.refine` below enforces the whitelist at runtime
+// without contaminating the inferred TS shape.
+const localizedKeysOk = (obj: Record<string, unknown>) =>
+	Object.keys(obj).every((k) => LANGUAGE_CODE_SET.has(k));
+const localizedKeysMessage = `keys must be one of: ${LANGUAGE_CODES.join(', ')}`;
+
+const LocalizedString = z
+	.record(z.string(), z.string())
+	.refine(localizedKeysOk, { message: localizedKeysMessage });
+const LocalizedStringArray = z
+	.record(z.string(), z.array(z.string()))
+	.refine(localizedKeysOk, { message: localizedKeysMessage });
+
+// ---------------------------------------------------------------------------
+// Registration
+// ---------------------------------------------------------------------------
 
 const FieldOption = z.object({
 	value: z.string(),
@@ -46,7 +79,9 @@ const RegistrationConfig = z.object({
 	fields: z.array(RegistrationField)
 });
 
-// --- Tutorial ---
+// ---------------------------------------------------------------------------
+// Tutorial
+// ---------------------------------------------------------------------------
 
 const TutorialStepValidation = z.object({
 	type: z.enum(['click', 'input', 'play', 'none']),
@@ -84,7 +119,15 @@ const TutorialConfig = z.object({
 	sampleStimuliIds: z.array(z.string()).default([])
 });
 
-// --- Response Widgets ---
+// ---------------------------------------------------------------------------
+// Response widgets
+// ---------------------------------------------------------------------------
+//
+// TODO(refactor): convert this into a `z.discriminatedUnion('type', [...])`
+// where each widget type has its own narrowly-typed `config`. The
+// `enforceWidgetConfig` superRefine below covers the runtime correctness side
+// of that refactor; the remaining work is purely TypeScript ergonomics for
+// downstream code paths and is out of scope for the audit-remediation pass.
 
 const WidgetOption = z.object({
 	value: z.string(),
@@ -92,47 +135,76 @@ const WidgetOption = z.object({
 });
 
 const WidgetConfig = z.object({
-	// For select/multiselect
 	options: z.array(WidgetOption).optional(),
-	// For likert/slider
 	min: z.number().optional(),
 	max: z.number().optional(),
 	step: z.number().optional(),
 	minLabel: LocalizedString.optional(),
 	maxLabel: LocalizedString.optional(),
-	// For textarea
 	minLength: z.number().optional(),
 	maxLength: z.number().optional(),
 	showCharCount: z.boolean().optional(),
-	// For timestamp-range
 	captureStartLabel: LocalizedString.optional(),
 	captureEndLabel: LocalizedString.optional(),
 	timestampReviewMode: z.enum(['segment', 'full-highlight']).optional(),
-	// For audio-recording
 	maxDurationSeconds: z.number().optional(),
 	maxFileSizeMB: z.number().optional()
 });
 
-const ResponseWidget = z.object({
-	id: z.string(),
-	type: z.enum([
-		'text', 'textarea', 'select', 'multiselect',
-		'likert', 'timestamp-range', 'audio-recording',
-		'slider', 'number'
-	]),
-	label: LocalizedString,
-	placeholder: LocalizedString.optional(),
-	required: z.boolean().default(true),
-	stepNumber: z.number().optional(),
-	stepLabel: LocalizedString.optional(),
-	config: WidgetConfig.optional(),
-	conditionalOn: z.object({
-		widgetId: z.string(),
-		value: z.string()
-	}).optional()
-});
+const WIDGET_TYPES = [
+	'text', 'textarea', 'select', 'multiselect',
+	'likert', 'timestamp-range', 'audio-recording',
+	'slider', 'number'
+] as const;
 
-// --- Phases ---
+const ResponseWidget = z
+	.object({
+		id: z.string(),
+		type: z.enum(WIDGET_TYPES),
+		label: LocalizedString,
+		placeholder: LocalizedString.optional(),
+		required: z.boolean().default(true),
+		stepNumber: z.number().optional(),
+		stepLabel: LocalizedString.optional(),
+		config: WidgetConfig.optional(),
+		conditionalOn: z.object({
+			widgetId: z.string(),
+			value: z.string()
+		}).optional()
+	})
+	.superRefine((w, ctx) => {
+		// Type-specific config invariants. These are what a discriminated
+		// union would enforce structurally; we enforce them as refinements.
+		const cfg = w.config ?? {};
+
+		if ((w.type === 'select' || w.type === 'multiselect') && (!cfg.options || cfg.options.length === 0)) {
+			ctx.addIssue({
+				code: 'custom',
+				path: ['config', 'options'],
+				message: `widget '${w.id}' (type=${w.type}) requires non-empty config.options`
+			});
+		}
+
+		// likert + slider have a discrete visible range and don't make sense
+		// without min/max. `number` widgets are plain numeric inputs where
+		// bounds are commonly optional, so we only require them here.
+		if ((w.type === 'likert' || w.type === 'slider') &&
+			(typeof cfg.min !== 'number' || typeof cfg.max !== 'number')) {
+			ctx.addIssue({
+				code: 'custom',
+				path: ['config'],
+				message: `widget '${w.id}' (type=${w.type}) requires numeric config.min and config.max`
+			});
+		}
+
+		if (w.type === 'timestamp-range' && cfg.timestampReviewMode === undefined) {
+			// Not required, but warn-via-issue would be noisy. Allow default.
+		}
+	});
+
+// ---------------------------------------------------------------------------
+// Phases
+// ---------------------------------------------------------------------------
 
 const GatekeeperQuestion = z.object({
 	text: LocalizedString,
@@ -176,27 +248,52 @@ const BranchRule = z.object({
 	nextPhaseSlug: z.string()
 });
 
-const PhaseConfig = z.object({
-	id: z.string(),
-	slug: z.string(),
-	type: z.enum(['stimulus-response', 'review']),
-	title: LocalizedString,
-	introduction: z.object({
+const PhaseConfig = z
+	.object({
+		id: z.string(),
+		slug: z.string(),
+		type: z.enum(['stimulus-response', 'review']),
 		title: LocalizedString,
-		body: LocalizedString
-	}).optional(),
-	gatekeeperQuestion: GatekeeperQuestion.optional(),
-	responseWidgets: z.array(ResponseWidget).default([]),
-	reviewConfig: ReviewConfig.optional(),
-	stimulusOrder: z.enum(['sequential', 'random', 'random-per-participant']).default('sequential'),
-	allowRevisit: z.boolean().default(true),
-	allowMultipleResponses: z.boolean().default(false),
-	skipRules: z.array(SkipRule).optional(),
-	branchRules: z.array(BranchRule).optional(),
-	completion: PhaseCompletion
-});
+		introduction: z.object({
+			title: LocalizedString,
+			body: LocalizedString
+		}).optional(),
+		gatekeeperQuestion: GatekeeperQuestion.optional(),
+		responseWidgets: z.array(ResponseWidget).default([]),
+		reviewConfig: ReviewConfig.optional(),
+		stimulusOrder: z.enum(['sequential', 'random', 'random-per-participant']).default('sequential'),
+		allowRevisit: z.boolean().default(true),
+		allowMultipleResponses: z.boolean().default(false),
+		skipRules: z.array(SkipRule).optional(),
+		branchRules: z.array(BranchRule).optional(),
+		completion: PhaseCompletion
+	})
+	.superRefine((phase, ctx) => {
+		// Review phases must declare reviewConfig (with its sourcePhase + widgets);
+		// stimulus-response phases must NOT have reviewConfig (it would be ignored).
+		if (phase.type === 'review' && !phase.reviewConfig) {
+			ctx.addIssue({
+				code: 'custom',
+				path: ['reviewConfig'],
+				message: `review phase '${phase.id}' requires reviewConfig`
+			});
+		}
+		if (phase.type === 'stimulus-response' && phase.reviewConfig) {
+			ctx.addIssue({
+				code: 'custom',
+				path: ['reviewConfig'],
+				message: `stimulus-response phase '${phase.id}' must not have reviewConfig`
+			});
+		}
+	});
 
-// --- Stimuli ---
+// ---------------------------------------------------------------------------
+// Stimuli
+// ---------------------------------------------------------------------------
+
+// Allow strings, numbers, booleans, and null in stimulus metadata. Replaces
+// the previous z.any() that defeated validation entirely.
+const StimulusMetadataValue = z.union([z.string(), z.number(), z.boolean(), z.null()]);
 
 const StimulusItem = z.object({
 	id: z.string(),
@@ -204,10 +301,8 @@ const StimulusItem = z.object({
 	url: z.string().optional(),
 	filename: z.string().optional(),
 	label: LocalizedString.optional(),
-	metadata: z.record(z.string(), z.any()).optional()
+	metadata: z.record(z.string(), StimulusMetadataValue).optional()
 });
-
-// --- Chunking & Blocks ---
 
 const BlockConfig = z.object({
 	id: z.string(),
@@ -234,7 +329,7 @@ const ChunkingConfig = z.object({
 	blockOrder: z.enum(['sequential', 'latin-square', 'random-per-participant']).default('sequential'),
 	withinBlockOrder: z.enum(['sequential', 'random', 'random-per-participant']).default('random-per-participant'),
 	breakScreen: BreakScreen.optional(),
-	minBreakMinutes: z.number().optional()  // minimum minutes between completing one chunk and starting the next
+	minBreakMinutes: z.number().optional()
 });
 
 const StimuliConfig = z.object({
@@ -247,13 +342,15 @@ const StimuliConfig = z.object({
 	chunking: ChunkingConfig.optional()
 });
 
-// --- Top-level ---
+// ---------------------------------------------------------------------------
+// Top-level
+// ---------------------------------------------------------------------------
 
 const ExperimentMetadata = z.object({
 	title: LocalizedString,
 	description: LocalizedString.optional(),
-	languages: z.array(z.string()).default(['en']),
-	defaultLanguage: z.string().default('en')
+	languages: z.array(z.enum(LANGUAGE_CODES)).default(['en']),
+	defaultLanguage: z.enum(LANGUAGE_CODES).default('en' as LanguageCode)
 });
 
 const CompletionConfig = z.object({
@@ -264,20 +361,134 @@ const CompletionConfig = z.object({
 	feedbackWidgets: z.array(ResponseWidget).default([])
 });
 
-export const ExperimentConfigSchema = z.object({
-	id: z.string().uuid().optional(),
-	slug: z.string().min(1).max(100).regex(/^[a-z0-9-]+$/, 'Slug must be lowercase alphanumeric with hyphens'),
-	version: z.number().int().default(1),
-	status: z.enum(['draft', 'active', 'paused', 'archived']).default('draft'),
-	metadata: ExperimentMetadata,
-	registration: RegistrationConfig,
-	tutorial: TutorialConfig.nullable().default(null),
-	phases: z.array(PhaseConfig).min(1),
-	stimuli: StimuliConfig,
-	completion: CompletionConfig.optional()
-});
+export const ExperimentConfigSchema = z
+	.object({
+		id: z.string().uuid().optional(),
+		slug: z.string().min(1).max(100).regex(/^[a-z0-9-]+$/, 'Slug must be lowercase alphanumeric with hyphens'),
+		version: z.number().int().default(1),
+		status: z.enum(['draft', 'active', 'paused', 'archived']).default('draft'),
+		metadata: ExperimentMetadata,
+		registration: RegistrationConfig,
+		tutorial: TutorialConfig.nullable().default(null),
+		phases: z.array(PhaseConfig).min(1),
+		stimuli: StimuliConfig,
+		completion: CompletionConfig.optional()
+	})
+	.superRefine((cfg, ctx) => {
+		// Reference integrity: every phase / stimulus / widget id mentioned by
+		// a review phase, skip rule, or branch rule must point at something
+		// that actually exists in the config. Without this, a typo in the
+		// admin UI silently produces a phase that never advances.
 
-// Export inferred types
+		const phaseSlugs = new Set(cfg.phases.map((p) => p.slug));
+		const phaseIds = new Set(cfg.phases.map((p) => p.id));
+		const stimulusIds = new Set(cfg.stimuli.items.map((s) => s.id));
+
+		for (let i = 0; i < cfg.phases.length; i++) {
+			const phase = cfg.phases[i];
+			const widgetIds = new Set(
+				(phase.type === 'review' && phase.reviewConfig
+					? phase.reviewConfig.responseWidgets
+					: phase.responseWidgets
+				).map((w) => w.id)
+			);
+
+			if (phase.type === 'review' && phase.reviewConfig) {
+				const src = phase.reviewConfig.sourcePhase;
+				if (!phaseIds.has(src) && !phaseSlugs.has(src)) {
+					ctx.addIssue({
+						code: 'custom',
+						path: ['phases', i, 'reviewConfig', 'sourcePhase'],
+						message: `sourcePhase '${src}' does not match any phase id or slug`
+					});
+				}
+			}
+
+			for (let r = 0; r < (phase.skipRules ?? []).length; r++) {
+				const rule = phase.skipRules![r];
+				if (!stimulusIds.has(rule.targetStimulusId)) {
+					ctx.addIssue({
+						code: 'custom',
+						path: ['phases', i, 'skipRules', r, 'targetStimulusId'],
+						message: `skipRule.targetStimulusId '${rule.targetStimulusId}' does not match any stimulus id`
+					});
+				}
+				if (!stimulusIds.has(rule.condition.stimulusId)) {
+					ctx.addIssue({
+						code: 'custom',
+						path: ['phases', i, 'skipRules', r, 'condition', 'stimulusId'],
+						message: `skipRule.condition.stimulusId '${rule.condition.stimulusId}' does not match any stimulus id`
+					});
+				}
+				if (!widgetIds.has(rule.condition.widgetId)) {
+					ctx.addIssue({
+						code: 'custom',
+						path: ['phases', i, 'skipRules', r, 'condition', 'widgetId'],
+						message: `skipRule.condition.widgetId '${rule.condition.widgetId}' does not match any widget id in this phase`
+					});
+				}
+			}
+
+			for (let b = 0; b < (phase.branchRules ?? []).length; b++) {
+				const rule = phase.branchRules![b];
+				if (!phaseSlugs.has(rule.nextPhaseSlug)) {
+					ctx.addIssue({
+						code: 'custom',
+						path: ['phases', i, 'branchRules', b, 'nextPhaseSlug'],
+						message: `branchRule.nextPhaseSlug '${rule.nextPhaseSlug}' does not match any phase slug`
+					});
+				}
+				if (!widgetIds.has(rule.condition.widgetId)) {
+					ctx.addIssue({
+						code: 'custom',
+						path: ['phases', i, 'branchRules', b, 'condition', 'widgetId'],
+						message: `branchRule.condition.widgetId '${rule.condition.widgetId}' does not match any widget id in this phase`
+					});
+				}
+				if (rule.condition.stimulusId && !stimulusIds.has(rule.condition.stimulusId)) {
+					ctx.addIssue({
+						code: 'custom',
+						path: ['phases', i, 'branchRules', b, 'condition', 'stimulusId'],
+						message: `branchRule.condition.stimulusId '${rule.condition.stimulusId}' does not match any stimulus id`
+					});
+				}
+			}
+		}
+
+		// Chunking blocks must reference real stimuli.
+		const chunking = cfg.stimuli.chunking;
+		if (chunking?.enabled) {
+			for (let c = 0; c < chunking.chunks.length; c++) {
+				const chunk = chunking.chunks[c];
+				for (let b = 0; b < chunk.blocks.length; b++) {
+					for (let s = 0; s < chunk.blocks[b].stimulusIds.length; s++) {
+						const sid = chunk.blocks[b].stimulusIds[s];
+						if (!stimulusIds.has(sid)) {
+							ctx.addIssue({
+								code: 'custom',
+								path: ['stimuli', 'chunking', 'chunks', c, 'blocks', b, 'stimulusIds', s],
+								message: `chunk block references unknown stimulus id '${sid}'`
+							});
+						}
+					}
+				}
+			}
+		}
+
+		// Default language must be one of the declared languages.
+		if (!cfg.metadata.languages.includes(cfg.metadata.defaultLanguage)) {
+			ctx.addIssue({
+				code: 'custom',
+				path: ['metadata', 'defaultLanguage'],
+				message: `defaultLanguage '${cfg.metadata.defaultLanguage}' is not in metadata.languages`
+			});
+		}
+	});
+
+// ---------------------------------------------------------------------------
+// Inferred types
+// ---------------------------------------------------------------------------
+
 export type ExperimentConfig = z.infer<typeof ExperimentConfigSchema>;
 export type RegistrationFieldType = z.infer<typeof RegistrationField>;
 export type ResponseWidgetType = z.infer<typeof ResponseWidget>;
@@ -296,3 +507,8 @@ export type LocalizedStringType = z.infer<typeof LocalizedString>;
 export type ChunkingConfigType = z.infer<typeof ChunkingConfig>;
 export type ChunkConfigType = z.infer<typeof ChunkConfig>;
 export type BlockConfigType = z.infer<typeof BlockConfig>;
+
+// Re-exported for the StimulusItem schema so admin code (e.g. bulk import)
+// can validate single items against the same shape used in the experiment
+// config.
+export const StimulusItemSchema = StimulusItem;

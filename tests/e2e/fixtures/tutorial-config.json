@@ -1,0 +1,91 @@
+{
+  "slug": "e2e-tutorial",
+  "version": 1,
+  "status": "active",
+  "metadata": {
+    "title": { "en": "Tutorial E2E" },
+    "languages": ["en"],
+    "defaultLanguage": "en"
+  },
+  "registration": {
+    "introduction": {
+      "title": { "en": "Welcome" },
+      "body": { "en": "Please register." }
+    },
+    "fields": [
+      {
+        "id": "age",
+        "type": "number",
+        "label": { "en": "Age" },
+        "required": true,
+        "validation": { "min": 18, "max": 120 }
+      }
+    ]
+  },
+  "tutorial": {
+    "allowSkip": true,
+    "welcome": {
+      "title": { "en": "Tutorial welcome" },
+      "body": { "en": "We'll walk you through the UI." },
+      "buttonText": { "en": "Begin tutorial" }
+    },
+    "steps": [
+      {
+        "id": "step1",
+        "targetSelector": "#gatekeeper-yes",
+        "title": { "en": "Step 1" },
+        "body": { "en": "Click Yes to continue." },
+        "position": "bottom"
+      }
+    ],
+    "completion": {
+      "title": { "en": "Tutorial done" },
+      "body": { "en": "Ready to start." },
+      "buttonText": { "en": "Start survey" }
+    },
+    "sampleStimuliIds": []
+  },
+  "phases": [
+    {
+      "id": "p1",
+      "slug": "main",
+      "type": "stimulus-response",
+      "title": { "en": "Main phase" },
+      "gatekeeperQuestion": {
+        "text": { "en": "Have you seen this before?" },
+        "yesLabel": { "en": "Yes" },
+        "noLabel": { "en": "No" },
+        "noResponseValue": "never_seen",
+        "skipToNext": true
+      },
+      "responseWidgets": [
+        {
+          "id": "rating",
+          "type": "likert",
+          "label": { "en": "Rate it" },
+          "required": true,
+          "config": { "min": 1, "max": 5 }
+        }
+      ],
+      "stimulusOrder": "sequential",
+      "allowRevisit": true,
+      "allowMultipleResponses": false,
+      "completion": {
+        "title": { "en": "Done" },
+        "body": { "en": "Done." }
+      }
+    }
+  ],
+  "stimuli": {
+    "type": "text",
+    "source": "external-urls",
+    "items": [
+      { "id": "s1", "type": "text", "label": { "en": "Apples" } }
+    ]
+  },
+  "completion": {
+    "title": { "en": "Thanks!" },
+    "body": { "en": "Done." },
+    "feedbackWidgets": []
+  }
+}

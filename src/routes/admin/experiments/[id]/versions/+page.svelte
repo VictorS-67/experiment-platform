@@ -64,6 +64,7 @@
 										return async ({ update }) => { await update({ reset: false }); rollingBack = false; };
 									}}>
 										<input type="hidden" name="versionId" value={v.id} />
+										<input type="hidden" name="expectedUpdatedAt" value={data.experiment.updated_at ?? ''} />
 										<button type="submit" disabled={rollingBack}
 											class="text-xs px-3 py-1 border border-gray-300 rounded hover:bg-gray-50 text-gray-700 cursor-pointer disabled:opacity-50">
 											{rollingBack ? '...' : 'Restore'}

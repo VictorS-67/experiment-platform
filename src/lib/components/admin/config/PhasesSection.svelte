@@ -1,5 +1,6 @@
 <script lang="ts">
 	import LocalizedInput from '../LocalizedInput.svelte';
+	import Field from './Field.svelte';
 	import { updatePath, phaseTypes, orderTypes, widgetTypes } from './helpers';
 	import type { ExperimentConfig } from '$lib/config/schema';
 
@@ -129,20 +130,17 @@
 			</div>
 			<div class="p-4 space-y-3">
 				<div class="grid grid-cols-3 gap-3">
-					<div>
-						<label class="block text-xs text-gray-500 mb-1">ID</label>
+					<Field label="ID">
 						<input type="text" value={phase.id}
 							oninput={(e) => update(['phases', String(pi), 'id'], e.currentTarget.value)}
 							class="w-full px-2 py-1 border border-gray-300 rounded text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-					</div>
-					<div>
-						<label class="block text-xs text-gray-500 mb-1">Slug</label>
+					</Field>
+					<Field label="Slug">
 						<input type="text" value={phase.slug}
 							oninput={(e) => update(['phases', String(pi), 'slug'], e.currentTarget.value)}
 							class="w-full px-2 py-1 border border-gray-300 rounded text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-					</div>
-					<div>
-						<label class="block text-xs text-gray-500 mb-1">Type</label>
+					</Field>
+					<Field label="Type">
 						<select
 							value={phase.type}
 							onchange={(e) => {
@@ -160,13 +158,12 @@
 								<option value={t}>{t}</option>
 							{/each}
 						</select>
-					</div>
+					</Field>
 				</div>
 
 				{#if phase.type === 'stimulus-response'}
 				<div class="grid grid-cols-3 gap-3">
-					<div>
-						<label class="block text-xs text-gray-500 mb-1">Stimulus Order</label>
+					<Field label="Stimulus Order">
 						<select value={phase.stimulusOrder}
 							onchange={(e) => update(['phases', String(pi), 'stimulusOrder'], e.currentTarget.value)}
 							class="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
@@ -174,7 +171,7 @@
 								<option value={t}>{t}</option>
 							{/each}
 						</select>
-					</div>
+					</Field>
 					<label class="flex items-end gap-2 text-sm">
 						<input type="checkbox" checked={phase.allowRevisit} onchange={(e) => update(['phases', String(pi), 'allowRevisit'], e.currentTarget.checked)} />
 						Allow Revisit
@@ -233,12 +230,11 @@
 									<LocalizedInput label="No Label" value={phase.gatekeeperQuestion.noLabel} {languages} onchange={(v) => update(['phases', String(pi), 'gatekeeperQuestion', 'noLabel'], v)} />
 								</div>
 								<div class="grid grid-cols-2 gap-2">
-									<div>
-										<label class="block text-xs text-gray-500 mb-1">No Response Value</label>
+									<Field label="No Response Value">
 										<input type="text" value={phase.gatekeeperQuestion.noResponseValue ?? 'null'}
 											oninput={(e) => update(['phases', String(pi), 'gatekeeperQuestion', 'noResponseValue'], e.currentTarget.value)}
 											class="w-full px-2 py-1 border border-gray-300 rounded text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-									</div>
+									</Field>
 									<label class="flex items-end gap-2 text-sm">
 										<input type="checkbox" checked={phase.gatekeeperQuestion.skipToNext ?? true} onchange={(e) => update(['phases', String(pi), 'gatekeeperQuestion', 'skipToNext'], e.currentTarget.checked)} />
 										Skip to Next on No
@@ -254,8 +250,7 @@
 					<div class="border-t border-gray-100 pt-3 mt-3">
 						<h5 class="text-xs font-medium text-gray-500 mb-2">Review Config</h5>
 						<div class="grid grid-cols-2 gap-3">
-							<div>
-								<label class="block text-xs text-gray-500 mb-1">Source Phase</label>
+							<Field label="Source Phase">
 								<select
 									value={phase.reviewConfig?.sourcePhase ?? ''}
 									onchange={(e) => {
@@ -271,7 +266,7 @@
 										<option value={p.id}>{p.slug}</option>
 									{/each}
 								</select>
-							</div>
+							</Field>
 							<label class="flex items-end gap-2 text-sm">
 								<input type="checkbox" checked={phase.reviewConfig?.filterEmpty ?? true}
 									onchange={(e) => {
@@ -284,20 +279,21 @@
 							</label>
 						</div>
 						<div class="mt-2">
-							<label class="block text-xs text-gray-500 mb-1">Replay Mode</label>
-							<select
-								value={phase.reviewConfig?.replayMode ?? 'segment'}
-								onchange={(e) => {
-									if (!config.phases[pi].reviewConfig) {
-										config.phases[pi].reviewConfig = { sourcePhase: '', filterEmpty: true, replayMode: 'segment', responseWidgets: [] };
-									}
-									config.phases[pi].reviewConfig!.replayMode = e.currentTarget.value as 'segment' | 'full-highlight';
-								}}
-								class="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-							>
-								<option value="segment">Segment only (replay between timestamps)</option>
-								<option value="full-highlight">Full video (highlight border during timestamps)</option>
-							</select>
+							<Field label="Replay Mode">
+								<select
+									value={phase.reviewConfig?.replayMode ?? 'segment'}
+									onchange={(e) => {
+										if (!config.phases[pi].reviewConfig) {
+											config.phases[pi].reviewConfig = { sourcePhase: '', filterEmpty: true, replayMode: 'segment', responseWidgets: [] };
+										}
+										config.phases[pi].reviewConfig!.replayMode = e.currentTarget.value as 'segment' | 'full-highlight';
+									}}
+									class="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+								>
+									<option value="segment">Segment only (replay between timestamps)</option>
+									<option value="full-highlight">Full video (highlight border during timestamps)</option>
+								</select>
+							</Field>
 						</div>
 					</div>
 				{/if}
@@ -316,14 +312,12 @@
 								<button type="button" onclick={() => removeWidget(pi, wi)} class="text-xs text-red-500 hover:text-red-700 cursor-pointer">Remove</button>
 							</div>
 							<div class="grid grid-cols-3 gap-2">
-								<div>
-									<label class="block text-xs text-gray-500 mb-0.5">ID</label>
+								<Field label="ID">
 									<input type="text" value={widget.id}
 										oninput={(e) => update(widgetPath(pi, wi, 'id'), e.currentTarget.value)}
 										class="w-full px-2 py-1 border border-gray-300 rounded text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-								</div>
-								<div>
-									<label class="block text-xs text-gray-500 mb-0.5">Type</label>
+								</Field>
+								<Field label="Type">
 									<select value={widget.type}
 										onchange={(e) => update(widgetPath(pi, wi, 'type'), e.currentTarget.value)}
 										class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500">
@@ -331,7 +325,7 @@
 											<option value={t}>{t}</option>
 										{/each}
 									</select>
-								</div>
+								</Field>
 								<label class="flex items-end gap-2 text-xs">
 									<input type="checkbox" checked={widget.required}
 										onchange={(e) => update(widgetPath(pi, wi, 'required'), e.currentTarget.checked)} />
@@ -343,12 +337,11 @@
 								<LocalizedInput label="Placeholder" value={widget.placeholder ?? {}} {languages} onchange={(v) => update(widgetPath(pi, wi, 'placeholder'), Object.values(v).some(Boolean) ? v : undefined)} />
 							{/if}
 							<div class="grid grid-cols-2 gap-2">
-								<div>
-									<label class="block text-xs text-gray-500 mb-0.5">Step Number</label>
+								<Field label="Step Number">
 									<input type="number" value={widget.stepNumber ?? ''}
 										oninput={(e) => update(widgetPath(pi, wi, 'stepNumber'), e.currentTarget.value ? e.currentTarget.valueAsNumber : undefined)}
 										class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="Optional" />
-								</div>
+								</Field>
 								<div>
 									<LocalizedInput label="Step Label" value={widget.stepLabel ?? {}} {languages} onchange={(v) => update(widgetPath(pi, wi, 'stepLabel'), Object.values(v).some(Boolean) ? v : undefined)} />
 								</div>
@@ -366,6 +359,7 @@
 										<div class="flex items-start gap-2 mb-1">
 											<input type="text" value={option.value}
 												oninput={(e) => update([...optPath, 'value'], e.currentTarget.value)}
+												aria-label="Option value"
 												class="w-24 shrink-0 px-2 py-1 border border-gray-300 rounded text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="value" />
 											<div class="flex-1">
 												<LocalizedInput label="" value={option.label} {languages} onchange={(v) => update([...optPath, 'label'], v)} />
@@ -381,25 +375,22 @@
 								<div class="border-t border-gray-100 pt-2 mt-2">
 									<span class="text-xs text-gray-500 block mb-1">Range config</span>
 									<div class="grid grid-cols-3 gap-2">
-										<div>
-											<label class="block text-xs text-gray-400 mb-0.5">Min</label>
+										<Field label="Min">
 											<input type="number" value={widget.config?.min ?? (widget.type === 'likert' ? 1 : 0)}
 												oninput={(e) => update([...widgetPath(pi, wi, 'config'), 'min'], e.currentTarget.valueAsNumber)}
 												class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-										</div>
-										<div>
-											<label class="block text-xs text-gray-400 mb-0.5">Max</label>
+										</Field>
+										<Field label="Max">
 											<input type="number" value={widget.config?.max ?? (widget.type === 'likert' ? 7 : 100)}
 												oninput={(e) => update([...widgetPath(pi, wi, 'config'), 'max'], e.currentTarget.valueAsNumber)}
 												class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-										</div>
+										</Field>
 										{#if widget.type === 'slider'}
-											<div>
-												<label class="block text-xs text-gray-400 mb-0.5">Step</label>
+											<Field label="Step">
 												<input type="number" value={widget.config?.step ?? 1}
 													oninput={(e) => update([...widgetPath(pi, wi, 'config'), 'step'], e.currentTarget.valueAsNumber)}
 													class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-											</div>
+											</Field>
 										{/if}
 									</div>
 									<div class="grid grid-cols-2 gap-2 mt-2">
@@ -419,18 +410,16 @@
 										Show character count
 									</label>
 									<div class="grid grid-cols-2 gap-2">
-										<div>
-											<label class="block text-xs text-gray-400 mb-0.5">Min length</label>
+										<Field label="Min length">
 											<input type="number" value={widget.config?.minLength ?? ''}
 												oninput={(e) => update([...widgetPath(pi, wi, 'config'), 'minLength'], e.currentTarget.value ? e.currentTarget.valueAsNumber : undefined)}
 												class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-										</div>
-										<div>
-											<label class="block text-xs text-gray-400 mb-0.5">Max length</label>
+										</Field>
+										<Field label="Max length">
 											<input type="number" value={widget.config?.maxLength ?? ''}
 												oninput={(e) => update([...widgetPath(pi, wi, 'config'), 'maxLength'], e.currentTarget.value ? e.currentTarget.valueAsNumber : undefined)}
 												class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-										</div>
+										</Field>
 									</div>
 								</div>
 							{/if}
@@ -440,24 +429,21 @@
 								<div class="border-t border-gray-100 pt-2 mt-2">
 									<span class="text-xs text-gray-500 block mb-1">Number config</span>
 									<div class="grid grid-cols-3 gap-2">
-										<div>
-											<label class="block text-xs text-gray-400 mb-0.5">Min</label>
+										<Field label="Min">
 											<input type="number" value={widget.config?.min ?? ''}
 												oninput={(e) => update([...widgetPath(pi, wi, 'config'), 'min'], e.currentTarget.value ? e.currentTarget.valueAsNumber : undefined)}
 												class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-										</div>
-										<div>
-											<label class="block text-xs text-gray-400 mb-0.5">Max</label>
+										</Field>
+										<Field label="Max">
 											<input type="number" value={widget.config?.max ?? ''}
 												oninput={(e) => update([...widgetPath(pi, wi, 'config'), 'max'], e.currentTarget.value ? e.currentTarget.valueAsNumber : undefined)}
 												class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-										</div>
-										<div>
-											<label class="block text-xs text-gray-400 mb-0.5">Step</label>
+										</Field>
+										<Field label="Step">
 											<input type="number" value={widget.config?.step ?? 1}
 												oninput={(e) => update([...widgetPath(pi, wi, 'config'), 'step'], e.currentTarget.valueAsNumber)}
 												class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-										</div>
+										</Field>
 									</div>
 								</div>
 							{/if}
@@ -469,8 +455,7 @@
 										<LocalizedInput label="Start button label" value={widget.config?.captureStartLabel ?? {}} {languages} onchange={(v) => update([...widgetPath(pi, wi, 'config'), 'captureStartLabel'], v)} />
 										<LocalizedInput label="End button label" value={widget.config?.captureEndLabel ?? {}} {languages} onchange={(v) => update([...widgetPath(pi, wi, 'config'), 'captureEndLabel'], v)} />
 									</div>
-									<div>
-										<label class="block text-xs text-gray-500 mb-0.5">Review Mode</label>
+									<Field label="Review Mode">
 										<select value={widget.config?.timestampReviewMode ?? ''}
 											onchange={(e) => update([...widgetPath(pi, wi, 'config'), 'timestampReviewMode'], e.currentTarget.value || undefined)}
 											class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500">
@@ -478,7 +463,7 @@
 											<option value="segment">Segment replay (start to end only)</option>
 											<option value="full-highlight">Full video with highlight border</option>
 										</select>
-									</div>
+									</Field>
 								</div>
 							{/if}
 
@@ -487,18 +472,16 @@
 								<div class="border-t border-gray-100 pt-2 mt-2">
 									<span class="text-xs text-gray-500 block mb-1">Recording config</span>
 									<div class="grid grid-cols-2 gap-2">
-										<div>
-											<label class="block text-xs text-gray-400 mb-0.5">Max duration (seconds)</label>
+										<Field label="Max duration (seconds)">
 											<input type="number" value={widget.config?.maxDurationSeconds ?? 120}
 												oninput={(e) => update([...widgetPath(pi, wi, 'config'), 'maxDurationSeconds'], e.currentTarget.valueAsNumber)}
 												class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-										</div>
-										<div>
-											<label class="block text-xs text-gray-400 mb-0.5">Max file size (MB)</label>
+										</Field>
+										<Field label="Max file size (MB)">
 											<input type="number" value={widget.config?.maxFileSizeMB ?? 50}
 												oninput={(e) => update([...widgetPath(pi, wi, 'config'), 'maxFileSizeMB'], e.currentTarget.valueAsNumber)}
 												class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-										</div>
+										</Field>
 									</div>
 								</div>
 							{/if}
@@ -523,8 +506,7 @@
 									</div>
 									{#if widget.conditionalOn}
 										<div class="grid grid-cols-2 gap-2 pl-2 border-l-2 border-indigo-200">
-											<div>
-												<label class="block text-xs text-gray-400 mb-0.5">Show when widget</label>
+											<Field label="Show when widget">
 												<select value={widget.conditionalOn.widgetId}
 													onchange={(e) => update([...widgetPath(pi, wi, 'conditionalOn'), 'widgetId'], e.currentTarget.value)}
 													class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500">
@@ -532,13 +514,12 @@
 														<option value={other.id}>{other.id}</option>
 													{/each}
 												</select>
-											</div>
-											<div>
-												<label class="block text-xs text-gray-400 mb-0.5">equals value</label>
+											</Field>
+											<Field label="equals value">
 												<input type="text" value={widget.conditionalOn.value}
 													oninput={(e) => update([...widgetPath(pi, wi, 'conditionalOn'), 'value'], e.currentTarget.value)}
 													class="w-full px-2 py-1 border border-gray-300 rounded text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-											</div>
+											</Field>
 										</div>
 									{/if}
 								</div>
@@ -599,8 +580,7 @@
 									<span class="text-xs text-gray-400">Rule {ri + 1}</span>
 									<button type="button" onclick={() => removeSkipRule(pi, ri)} class="text-xs text-red-500 hover:text-red-700 cursor-pointer">Remove</button>
 								</div>
-								<div>
-									<label class="block text-xs text-gray-400 mb-0.5">Skip stimulus</label>
+								<Field label="Skip stimulus">
 									<select value={rule.targetStimulusId}
 										onchange={(e) => update([...rulePath, 'targetStimulusId'], e.currentTarget.value)}
 										class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500">
@@ -609,10 +589,9 @@
 											<option value={stim.id}>{stim.id}</option>
 										{/each}
 									</select>
-								</div>
+								</Field>
 								<div class="grid grid-cols-2 gap-2">
-									<div>
-										<label class="block text-xs text-gray-400 mb-0.5">When stimulus</label>
+									<Field label="When stimulus">
 										<select value={rule.condition.stimulusId}
 											onchange={(e) => update([...rulePath, 'condition', 'stimulusId'], e.currentTarget.value)}
 											class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500">
@@ -621,9 +600,8 @@
 												<option value={stim.id}>{stim.id}</option>
 											{/each}
 										</select>
-									</div>
-									<div>
-										<label class="block text-xs text-gray-400 mb-0.5">Widget</label>
+									</Field>
+									<Field label="Widget">
 										<select value={rule.condition.widgetId}
 											onchange={(e) => update([...rulePath, 'condition', 'widgetId'], e.currentTarget.value)}
 											class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500">
@@ -632,24 +610,22 @@
 												<option value={w.id}>{w.id}</option>
 											{/each}
 										</select>
-									</div>
+									</Field>
 								</div>
 								<div class="grid grid-cols-2 gap-2">
-									<div>
-										<label class="block text-xs text-gray-400 mb-0.5">Operator</label>
+									<Field label="Operator">
 										<select value={rule.condition.operator ?? 'equals'}
 											onchange={(e) => update([...rulePath, 'condition', 'operator'], e.currentTarget.value)}
 											class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500">
 											<option value="equals">equals</option>
 											<option value="not_equals">not equals</option>
 										</select>
-									</div>
-									<div>
-										<label class="block text-xs text-gray-400 mb-0.5">Value</label>
+									</Field>
+									<Field label="Value">
 										<input type="text" value={rule.condition.value}
 											oninput={(e) => update([...rulePath, 'condition', 'value'], e.currentTarget.value)}
 											class="w-full px-2 py-1 border border-gray-300 rounded text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-									</div>
+									</Field>
 								</div>
 							</div>
 						{/each}
@@ -673,8 +649,7 @@
 								<button type="button" onclick={() => removeBranchRule(pi, ri)} class="text-xs text-red-500 hover:text-red-700 cursor-pointer">Remove</button>
 							</div>
 							<div class="grid grid-cols-2 gap-2">
-								<div>
-									<label class="block text-xs text-gray-400 mb-0.5">Widget</label>
+								<Field label="Widget">
 									<select value={rule.condition.widgetId}
 										onchange={(e) => update([...brPath, 'condition', 'widgetId'], e.currentTarget.value)}
 										class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500">
@@ -683,9 +658,8 @@
 											<option value={w.id}>{w.id}</option>
 										{/each}
 									</select>
-								</div>
-								<div>
-									<label class="block text-xs text-gray-400 mb-0.5">On stimulus (optional)</label>
+								</Field>
+								<Field label="On stimulus (optional)">
 									<select value={rule.condition.stimulusId ?? ''}
 										onchange={(e) => update([...brPath, 'condition', 'stimulusId'], e.currentTarget.value || undefined)}
 										class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500">
@@ -694,26 +668,23 @@
 											<option value={stim.id}>{stim.id}</option>
 										{/each}
 									</select>
-								</div>
+								</Field>
 							</div>
 							<div class="grid grid-cols-3 gap-2">
-								<div>
-									<label class="block text-xs text-gray-400 mb-0.5">Operator</label>
+								<Field label="Operator">
 									<select value={rule.condition.operator ?? 'equals'}
 										onchange={(e) => update([...brPath, 'condition', 'operator'], e.currentTarget.value)}
 										class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500">
 										<option value="equals">equals</option>
 										<option value="not_equals">not equals</option>
 									</select>
-								</div>
-								<div>
-									<label class="block text-xs text-gray-400 mb-0.5">Value</label>
+								</Field>
+								<Field label="Value">
 									<input type="text" value={rule.condition.value}
 										oninput={(e) => update([...brPath, 'condition', 'value'], e.currentTarget.value)}
 										class="w-full px-2 py-1 border border-gray-300 rounded text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-								</div>
-								<div>
-									<label class="block text-xs text-gray-400 mb-0.5">Go to phase</label>
+								</Field>
+								<Field label="Go to phase">
 									<select value={rule.nextPhaseSlug}
 										onchange={(e) => update([...brPath, 'nextPhaseSlug'], e.currentTarget.value)}
 										class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500">
@@ -722,7 +693,7 @@
 											<option value={p.slug}>{p.slug}</option>
 										{/each}
 									</select>
-								</div>
+								</Field>
 							</div>
 						</div>
 					{/each}

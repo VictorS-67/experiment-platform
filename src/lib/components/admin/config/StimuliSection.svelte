@@ -1,9 +1,53 @@
 <script lang="ts">
 	import LocalizedInput from '../LocalizedInput.svelte';
+	import Field from './Field.svelte';
+	import BulkImportModal from './BulkImportModal.svelte';
 	import { updatePath, stimulusTypes, sourceTypes } from './helpers';
-	import type { ExperimentConfig } from '$lib/config/schema';
+	import type { ExperimentConfig, StimulusItemType } from '$lib/config/schema';
 
 	let { config, languages, experimentId }: { config: ExperimentConfig; languages: string[]; experimentId?: string } = $props();
+
+	let showBulkImport = $state(false);
+
+	// Storage tab inside the modal is only available when prereqs are met.
+	// Pick an initial tab that won't be empty: CSV if storage isn't configured.
+	let bulkImportInitialMode = $derived<'storage' | 'csv'>(
+		config.stimuli.source === 'supabase-storage' && config.stimuli.storagePath ? 'storage' : 'csv'
+	);
+
+	// Default `replace` when the items list is empty (first import, no data to
+	// preserve), `append` otherwise. Keeps the common case frictionless without
+	// making bulk-wipe the default when there's existing data at stake.
+	let bulkImportInitialStrategy = $derived<'append' | 'replace'>(
+		config.stimuli.items.length === 0 ? 'replace' : 'append'
+	);
+
+	function handleBulkImport(
+		items: StimulusItemType[],
+		newMetadataKeys: string[],
+		strategy: 'append' | 'replace'
+	) {
+		if (strategy === 'replace') {
+			config.stimuli.items.splice(0, config.stimuli.items.length, ...items);
+		} else {
+			config.stimuli.items.push(...items);
+		}
+
+		if (newMetadataKeys.length > 0) {
+			const existing = new Set(config.stimuli.metadataKeys ?? []);
+			const merged = [...(config.stimuli.metadataKeys ?? [])];
+			for (const k of newMetadataKeys) {
+				if (!existing.has(k)) {
+					merged.push(k);
+					existing.add(k);
+				}
+			}
+			config.stimuli.metadataKeys = merged;
+		}
+
+		showBulkImport = false;
+		currentPage = 0;
+	}
 
 	const update = (path: string[], value: unknown) => updatePath(config, path, value);
 
@@ -51,7 +95,6 @@
 	function addStimulusItem() {
 		const newId = `stim_${Date.now()}`;
 		config.stimuli.items.push({ id: newId });
-		// Jump to last page to see the new item
 		searchQuery = '';
 		currentPage = Math.floor(config.stimuli.items.length / PAGE_SIZE);
 	}
@@ -63,8 +106,7 @@
 
 <div class="space-y-4">
 	<div class="grid grid-cols-3 gap-3">
-		<div>
-			<label class="block text-xs text-gray-500 mb-1">Type</label>
+		<Field label="Type">
 			<select
 				value={config.stimuli.type}
 				onchange={(e) => update(['stimuli', 'type'], e.currentTarget.value)}
@@ -74,9 +116,8 @@
 					<option value={t}>{t}</option>
 				{/each}
 			</select>
-		</div>
-		<div>
-			<label class="block text-xs text-gray-500 mb-1">Source</label>
+		</Field>
+		<Field label="Source">
 			<select
 				value={config.stimuli.source}
 				onchange={(e) => update(['stimuli', 'source'], e.currentTarget.value)}
@@ -86,9 +127,8 @@
 					<option value={t}>{t}</option>
 				{/each}
 			</select>
-		</div>
-		<div>
-			<label class="block text-xs text-gray-500 mb-1">Storage Path</label>
+		</Field>
+		<Field label="Storage Path">
 			<input
 				type="text"
 				value={config.stimuli.storagePath ?? ''}
@@ -96,7 +136,7 @@
 				class="w-full px-2 py-1 border border-gray-300 rounded text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
 				placeholder="stimuli/experiment-name"
 			/>
-		</div>
+		</Field>
 	</div>
 
 	{#if config.stimuli.source === 'supabase-storage' && config.stimuli.storagePath}
@@ -122,8 +162,7 @@
 		</div>
 	{/if}
 
-	<div>
-		<label class="block text-xs text-gray-500 mb-1">Message template <span class="text-gray-400 font-normal">(optional)</span></label>
+	<Field label="Message template (optional)" help="Shown below each stimulus. Use {'{metadata.key}'} for per-stimulus values.">
 		<input
 			type="text"
 			value={config.stimuli.messageTemplate ?? ''}
@@ -131,13 +170,12 @@
 			class="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
 			placeholder="e.g. The emotion displayed is {'{metadata.emotion}'}."
 		/>
-		<p class="mt-1 text-xs text-gray-400">Shown below each stimulus. Use <code class="font-mono">{'{metadata.key}'}</code> for per-stimulus values.</p>
-	</div>
+	</Field>
 
 	<!-- Shared metadata keys -->
 	<div class="space-y-1.5">
 		<div class="flex items-center justify-between">
-			<label class="block text-xs text-gray-500">Metadata keys</label>
+			<span class="block text-xs text-gray-500">Metadata keys</span>
 			<button
 				type="button"
 				onclick={() => {
@@ -172,6 +210,7 @@
 							update(['stimuli', 'items', String(idx), 'metadata'], current);
 						});
 					}}
+					aria-label="Metadata key name"
 					class="w-36 px-1.5 py-0.5 border border-gray-300 rounded text-xs font-mono focus:outline-none focus:ring-1 focus:ring-indigo-500"
 					placeholder="key name"
 				/>
@@ -198,15 +237,36 @@
 
 	<div class="flex items-center justify-between">
 		<h4 class="text-sm text-gray-500">Items ({config.stimuli.items.length})</h4>
-		<button type="button" onclick={addStimulusItem} class="text-xs px-2 py-1 bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100 cursor-pointer">+ Add Item</button>
+		<div class="flex items-center gap-2">
+			<button
+				type="button"
+				onclick={() => { showBulkImport = true; }}
+				disabled={!experimentId}
+				title={!experimentId ? 'Save the experiment first to enable bulk import' : ''}
+				class="text-xs px-2 py-1 bg-white border border-gray-300 text-gray-700 rounded hover:bg-gray-50 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+			>Bulk import</button>
+			<button type="button" onclick={addStimulusItem} class="text-xs px-2 py-1 bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100 cursor-pointer">+ Add Item</button>
+		</div>
 	</div>
 
-	<!-- Search + pagination controls -->
+	{#if experimentId}
+		<BulkImportModal
+			show={showBulkImport}
+			{config}
+			{experimentId}
+			initialMode={bulkImportInitialMode}
+			initialStrategy={bulkImportInitialStrategy}
+			onclose={() => { showBulkImport = false; }}
+			onimport={handleBulkImport}
+		/>
+	{/if}
+
 	{#if config.stimuli.items.length > PAGE_SIZE}
 		<div class="flex items-center gap-3">
 			<input
 				type="text"
 				bind:value={searchQuery}
+				aria-label="Search stimuli"
 				placeholder="Search by ID, filename, or URL..."
 				class="flex-1 px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
 			/>
@@ -239,37 +299,33 @@
 				</div>
 			</div>
 			<div class="grid grid-cols-3 gap-2">
-				<div>
-					<label class="block text-xs text-gray-500 mb-0.5">ID</label>
+				<Field label="ID">
 					<input
 						type="text"
 						value={item.id}
 						oninput={(e) => update(['stimuli', 'items', String(i), 'id'], e.currentTarget.value)}
 						class="w-full px-2 py-1 border border-gray-300 rounded text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
 					/>
-				</div>
-				<div>
-					<label class="block text-xs text-gray-500 mb-0.5">Filename</label>
+				</Field>
+				<Field label="Filename">
 					<input
 						type="text"
 						value={item.filename ?? ''}
 						oninput={(e) => update(['stimuli', 'items', String(i), 'filename'], e.currentTarget.value || undefined)}
 						class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
 					/>
-				</div>
-				<div>
-					<label class="block text-xs text-gray-500 mb-0.5">URL</label>
+				</Field>
+				<Field label="URL">
 					<input
 						type="text"
 						value={item.url ?? ''}
 						oninput={(e) => update(['stimuli', 'items', String(i), 'url'], e.currentTarget.value || undefined)}
 						class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
 					/>
-				</div>
+				</Field>
 			</div>
 			<div class="grid grid-cols-2 gap-2">
-				<div>
-					<label class="block text-xs text-gray-500 mb-0.5">Type</label>
+				<Field label="Type">
 					<select
 						value={item.type ?? ''}
 						onchange={(e) => update(['stimuli', 'items', String(i), 'type'], e.currentTarget.value || undefined)}
@@ -280,12 +336,11 @@
 							<option value={t}>{t}</option>
 						{/each}
 					</select>
-				</div>
+				</Field>
 				<div>
 					<LocalizedInput label="Label" value={item.label ?? {}} {languages} onchange={(v) => update(['stimuli', 'items', String(i), 'label'], Object.values(v).some(Boolean) ? v : undefined)} />
 				</div>
 			</div>
-			<!-- Metadata values -->
 			{#if config.stimuli.metadataKeys?.length}
 				<div class="space-y-1">
 					{#each (config.stimuli.metadataKeys ?? []) as metaKey}
@@ -299,6 +354,7 @@
 									if (!item.metadata) update(['stimuli', 'items', String(i), 'metadata'], {});
 									update(['stimuli', 'items', String(i), 'metadata', metaKey], e.currentTarget.value);
 								}}
+								aria-label={`${metaKey} value`}
 								class="flex-1 px-1.5 py-0.5 border border-gray-300 rounded text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
 								placeholder="value"
 							/>
@@ -309,7 +365,6 @@
 		</div>
 	{/each}
 
-	<!-- Bottom pagination -->
 	{#if config.stimuli.items.length > PAGE_SIZE}
 		<div class="flex items-center justify-center gap-1">
 			<button type="button" disabled={safePage === 0} onclick={() => currentPage = safePage - 1}

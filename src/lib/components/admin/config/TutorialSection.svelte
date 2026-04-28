@@ -1,5 +1,6 @@
 <script lang="ts">
 	import LocalizedInput from '../LocalizedInput.svelte';
+	import Field from './Field.svelte';
 	import { updatePath } from './helpers';
 	import type { ExperimentConfig } from '$lib/config/schema';
 
@@ -79,7 +80,6 @@
 			</button>
 		</div>
 
-		<!-- Allow skip -->
 		<label class="flex items-center gap-2 cursor-pointer">
 			<input
 				type="checkbox"
@@ -90,7 +90,6 @@
 			<span class="text-sm text-gray-700">Allow participants to skip the tutorial</span>
 		</label>
 
-		<!-- Introduction page -->
 		<div class="border border-gray-200 rounded p-3 space-y-3">
 			<div class="flex items-center justify-between">
 				<h4 class="text-sm font-medium text-gray-600">Introduction page</h4>
@@ -114,13 +113,11 @@
 			{/if}
 		</div>
 
-		<!-- Welcome -->
 		<h4 class="text-sm font-medium text-gray-600 pt-2">Welcome</h4>
 		<LocalizedInput label="Title" value={config.tutorial.welcome.title} {languages} onchange={(v) => update(['tutorial', 'welcome', 'title'], v)} />
 		<LocalizedInput label="Body" value={config.tutorial.welcome.body} {languages} multiline onchange={(v) => update(['tutorial', 'welcome', 'body'], v)} />
 		<LocalizedInput label="Button Text" value={config.tutorial.welcome.buttonText} {languages} onchange={(v) => update(['tutorial', 'welcome', 'buttonText'], v)} />
 
-		<!-- Steps -->
 		<h4 class="text-sm font-medium text-gray-600 pt-2">Steps ({config.tutorial.steps.length})</h4>
 		{#each config.tutorial.steps as step, si}
 			{@const isCustomTarget = !!step.targetSelector && !allTutorialSelectors().includes(step.targetSelector)}
@@ -131,25 +128,21 @@
 						class="text-xs text-red-500 hover:text-red-700 cursor-pointer">Remove</button>
 				</div>
 				<div class="grid grid-cols-2 gap-2">
-					<div>
-						<label class="block text-xs text-gray-500 mb-0.5">ID</label>
+					<Field label="ID">
 						<input type="text" value={step.id} oninput={(e) => update(['tutorial', 'steps', String(si), 'id'], e.currentTarget.value)}
 							class="w-full px-2 py-1 border border-gray-300 rounded text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-					</div>
-					<div>
-						<label class="block text-xs text-gray-500 mb-0.5">Position</label>
+					</Field>
+					<Field label="Position">
 						<select value={step.position} onchange={(e) => update(['tutorial', 'steps', String(si), 'position'], e.currentTarget.value)}
 							class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500">
 							{#each ['top', 'bottom', 'left', 'right', 'center'] as pos}
 								<option value={pos}>{pos}</option>
 							{/each}
 						</select>
-					</div>
+					</Field>
 				</div>
 
-				<!-- Target selector -->
-				<div>
-					<label class="block text-xs text-gray-500 mb-0.5">Target</label>
+				<Field label="Target">
 					<select
 						value={isCustomTarget ? '__custom__' : (step.targetSelector || '')}
 						onchange={(e) => {
@@ -179,15 +172,14 @@
 					{#if isCustomTarget}
 						<input type="text" value={step.targetSelector}
 							oninput={(e) => update(['tutorial', 'steps', String(si), 'targetSelector'], e.currentTarget.value)}
+							aria-label="Custom target selector"
 							placeholder="#my-element"
 							class="mt-1 w-full px-2 py-1 border border-gray-300 rounded text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500" />
 					{/if}
-				</div>
+				</Field>
 
-				<!-- Require action -->
 				<div class="grid grid-cols-2 gap-2">
-					<div>
-						<label class="block text-xs text-gray-500 mb-0.5">Require action</label>
+					<Field label="Require action">
 						<select
 							value={step.validation?.type ?? 'none'}
 							onchange={(e) => {
@@ -205,15 +197,14 @@
 							<option value="input">Input — must type in target</option>
 							<option value="play">Play — must play media</option>
 						</select>
-					</div>
+					</Field>
 					{#if step.validation && step.validation.type !== 'none'}
-						<div>
-							<label class="block text-xs text-gray-500 mb-0.5">Validation target <span class="text-gray-400">(optional)</span></label>
+						<Field label="Validation target (optional)">
 							<input type="text" value={step.validation.target ?? ''}
 								oninput={(e) => update(['tutorial', 'steps', String(si), 'validation', 'target'], e.currentTarget.value || undefined)}
 								placeholder={step.targetSelector || '#element'}
 								class="w-full px-2 py-1 border border-gray-300 rounded text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-						</div>
+						</Field>
 					{/if}
 				</div>
 
@@ -238,13 +229,11 @@
 			+ Add Step
 		</button>
 
-		<!-- Completion -->
 		<h4 class="text-sm font-medium text-gray-600 pt-2">Completion</h4>
 		<LocalizedInput label="Title" value={config.tutorial.completion.title} {languages} onchange={(v) => update(['tutorial', 'completion', 'title'], v)} />
 		<LocalizedInput label="Body" value={config.tutorial.completion.body} {languages} multiline onchange={(v) => update(['tutorial', 'completion', 'body'], v)} />
 		<LocalizedInput label="Button Text" value={config.tutorial.completion.buttonText} {languages} onchange={(v) => update(['tutorial', 'completion', 'buttonText'], v)} />
 
-		<!-- Sample stimuli -->
 		<div class="border-t border-gray-100 pt-3 mt-3">
 			<h4 class="text-sm font-medium text-gray-600 mb-2">Sample Stimuli for Tutorial</h4>
 			<p class="text-xs text-gray-400 mb-2">Select which stimuli to use during the tutorial walkthrough.</p>

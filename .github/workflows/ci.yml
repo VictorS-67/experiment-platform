@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      # svelte-kit sync needs these to be set to something syntactically valid.
+      # The app won't actually hit Supabase during `check`/`test`/`build`, but
+      # importing `$env/static/public` / `$env/static/private` fails if the var
+      # is missing. Use obvious placeholder values.
+      - name: Set placeholder env
+        # Keys must be ≥20 chars to pass the supabase.ts env validation at
+        # module load. Build never hits the network with these.
+        run: |
+          echo "PUBLIC_SUPABASE_URL=https://placeholder.supabase.co" >> $GITHUB_ENV
+          echo "PUBLIC_SUPABASE_ANON_KEY=placeholder-anon-key-20char" >> $GITHUB_ENV
+          echo "SUPABASE_SERVICE_ROLE_KEY=placeholder-service-role-key-20char" >> $GITHUB_ENV
+
+      - run: npm run check
+      - run: npm run test
+      - run: npm run build
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: check-and-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+
+      - name: Start local Supabase (applies all migrations)
+        run: supabase start
+
+      - name: Export Supabase env for Playwright
+        run: |
+          API_URL=$(supabase status -o env | grep '^API_URL=' | cut -d= -f2)
+          ANON_KEY=$(supabase status -o env | grep '^ANON_KEY=' | cut -d= -f2)
+          SERVICE_ROLE_KEY=$(supabase status -o env | grep '^SERVICE_ROLE_KEY=' | cut -d= -f2)
+          echo "PUBLIC_SUPABASE_URL=$API_URL" >> $GITHUB_ENV
+          echo "PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY" >> $GITHUB_ENV
+          echo "SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY" >> $GITHUB_ENV
+
+      - run: npm run test:e2e
+
+      - name: Stop local Supabase
+        if: always()
+        run: supabase stop

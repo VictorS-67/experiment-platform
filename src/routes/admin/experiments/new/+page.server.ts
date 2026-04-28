@@ -88,7 +88,7 @@ export const actions: Actions = {
 		}
 
 		try {
-			const { id } = await createExperiment(slug, result.data);
+			const { id } = await createExperiment(slug, result.data, locals.adminUser.id);
 			redirect(302, `/admin/experiments/${id}`);
 		} catch (err) {
 			if (isRedirect(err)) throw err;

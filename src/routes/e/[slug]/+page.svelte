@@ -37,6 +37,11 @@
 		if (breakSecondsLeft > 0) breakInterval = setInterval(updateCountdown, 1000);
 	}
 
+	// Clear the countdown interval if the participant navigates away mid-break.
+	$effect(() => () => {
+		if (breakInterval) { clearInterval(breakInterval); breakInterval = undefined; }
+	});
+
 	function formatCountdown(seconds: number): string {
 		const m = Math.floor(seconds / 60);
 		const s = seconds % 60;

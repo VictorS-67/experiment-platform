@@ -1,47 +1,39 @@
-import type { Handle } from '@sveltejs/kit';
+import type { Handle, HandleServerError } from '@sveltejs/kit';
 import { PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY } from '$env/static/public';
 import { dev } from '$app/environment';
 import { createClient } from '@supabase/supabase-js';
 import { getServerSupabase } from '$lib/server/supabase';
 import { isRedirect, isHttpError, redirect, error } from '@sveltejs/kit';
 import { COOKIE_OPTIONS } from '$lib/server/cookies';
+import { checkRateLimit } from '$lib/server/rate-limit';
+import { getParticipantAndMaybeRotate } from '$lib/server/data';
+import { reportError } from '$lib/server/errors';
 
-// --- Rate limiting (in-memory sliding window) ---
-// NOTE: This rate limiter uses module-scope state and resets on every serverless cold start.
-// It provides best-effort protection on long-running Node processes only.
-// For production serverless deployments, replace with a Redis/Upstash-backed solution.
+// Global error hook — runs for every unhandled exception in a route handler.
+// Writes to error_log (or Sentry if configured). Returns only a safe message
+// to the client so internals (stack traces, DB errors) don't leak.
+export const handleError: HandleServerError = async ({ error: err, event, status, message }) => {
+	await reportError(err, {
+		url: event.url.pathname,
+		method: event.request.method,
+		status,
+		userId: event.locals.adminUser?.id ?? null,
+		metadata: { message }
+	});
+	return { message: status >= 500 ? 'Internal server error' : message };
+};
 
-const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
+const PARTICIPANT_COOKIE_OPTIONS = { ...COOKIE_OPTIONS, maxAge: 60 * 60 * 24 * 90 }; // 90 days
+
+// --- Rate limiting (Postgres-backed; migration 016) ---
+// 60-second fixed window per (ip, endpoint). Survives serverless cold starts.
+
+const RATE_WINDOW_SECONDS = 60;
 const RATE_LIMITS: Record<string, number> = {
 	'/auth': 20,    // 20 auth requests per minute per IP
 	'/save': 60,    // 60 saves per minute per IP
 	'/upload': 30   // 30 uploads per minute per IP
 };
-
-const requestCounts = new Map<string, { timestamps: number[] }>();
-
-// Clean up stale entries every 5 minutes to prevent memory leak
-setInterval(() => {
-	const now = Date.now();
-	for (const [key, entry] of requestCounts) {
-		entry.timestamps = entry.timestamps.filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
-		if (entry.timestamps.length === 0) requestCounts.delete(key);
-	}
-}, 5 * 60_000);
-
-function checkRateLimit(ip: string, endpoint: string, limit: number): boolean {
-	const key = `${ip}:${endpoint}`;
-	const now = Date.now();
-	const entry = requestCounts.get(key) ?? { timestamps: [] };
-
-	// Remove timestamps outside the window
-	entry.timestamps = entry.timestamps.filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
-	if (entry.timestamps.length >= limit) return false;
-
-	entry.timestamps.push(now);
-	requestCounts.set(key, entry);
-	return true;
-}
 
 export const handle: Handle = async ({ event, resolve }) => {
 	const { pathname } = event.url;
@@ -80,7 +72,8 @@ export const handle: Handle = async ({ event, resolve }) => {
 
 		for (const [endpointPattern, limit] of Object.entries(RATE_LIMITS)) {
 			if (pathname.endsWith(endpointPattern) || pathname.includes(`${endpointPattern}/`)) {
-				if (!checkRateLimit(clientIp, endpointPattern, limit)) {
+				const allowed = await checkRateLimit(clientIp, endpointPattern, RATE_WINDOW_SECONDS, limit);
+				if (!allowed) {
 					error(429, 'Too many requests — please wait a moment and try again');
 				}
 				break;
@@ -88,8 +81,31 @@ export const handle: Handle = async ({ event, resolve }) => {
 		}
 	}
 
-	// Parse participant session token from cookie
-	const sessionToken = event.cookies.get('session_token') ?? null;
+	// Parse participant session token from cookie. For participant page loads,
+	// rotate the token if it's older than 24h (migration 018) — limits the
+	// exposure window if the cookie ever leaks. We only rotate on GETs to
+	// avoid mid-POST cookie races; POST handlers can re-verify by reading
+	// `event.locals.sessionToken` which was just refreshed.
+	let sessionToken = event.cookies.get('session_token') ?? null;
+	if (sessionToken && method === 'GET' && pathname.startsWith('/e/')) {
+		try {
+			const result = await getParticipantAndMaybeRotate(sessionToken);
+			if (result === null) {
+				// Token doesn't match any participant row (deleted, rotated by
+				// migration 013, or just stale). Clear the cookie so the page
+				// guard's redirect to /e/<slug> isn't followed by another stale
+				// hit on every subsequent navigation.
+				event.cookies.delete('session_token', { path: '/' });
+				sessionToken = null;
+			} else if (result.newToken) {
+				event.cookies.set('session_token', result.newToken, PARTICIPANT_COOKIE_OPTIONS);
+				sessionToken = result.newToken;
+			}
+		} catch (err) {
+			// Failure here is non-fatal — the next request will retry rotation.
+			console.warn('Session rotation skipped due to error:', err);
+		}
+	}
 	event.locals.sessionToken = sessionToken;
 	event.locals.adminUser = null;
 
@@ -130,9 +146,12 @@ export const handle: Handle = async ({ event, resolve }) => {
 					...COOKIE_OPTIONS,
 					maxAge: 60 * 60 // 1 hour (matches JWT lifetime)
 				});
+				// Supabase rotates the refresh token on every successful refresh
+				// (refresh_token_reuse_detection is on by default), so we set the
+				// freshly-issued one. Shortened from 30d → 14d per audit.
 				event.cookies.set('admin_refresh_token', session.refresh_token ?? refreshToken, {
 					...COOKIE_OPTIONS,
-					maxAge: 60 * 60 * 24 * 30
+					maxAge: 60 * 60 * 24 * 14
 				});
 
 				verifiedUserId = session.user.id;
@@ -170,24 +189,22 @@ export const handle: Handle = async ({ event, resolve }) => {
 
 	const response = await resolve(event);
 
-	// Security headers
+	// Security headers (CSP is configured in svelte.config.js under kit.csp
+	// so SvelteKit can generate per-response nonces/hashes for every <script>
+	// and <style> tag it emits — that's why `unsafe-inline` is no longer in
+	// script-src or style-src-elem).
 	response.headers.set('X-Frame-Options', 'DENY');
 	response.headers.set('X-Content-Type-Options', 'nosniff');
 	response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
 	response.headers.set('Permissions-Policy', 'camera=(), microphone=(self), geolocation=()');
-	response.headers.set(
-		'Content-Security-Policy',
-		[
-			"default-src 'self'",
-			"script-src 'self' 'unsafe-inline'",
-			"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-			"font-src 'self' https://fonts.gstatic.com",
-			`img-src 'self' data: blob: ${PUBLIC_SUPABASE_URL}`,
-			`media-src 'self' blob: ${PUBLIC_SUPABASE_URL}`,
-			`connect-src 'self' ${PUBLIC_SUPABASE_URL}`,
-			"frame-ancestors 'none'"
-		].join('; ')
-	);
+	// HSTS — only meaningful over HTTPS so we skip in dev (where vite serves
+	// over http://localhost). 1 year, includeSubDomains, preload-eligible.
+	if (!dev) {
+		response.headers.set(
+			'Strict-Transport-Security',
+			'max-age=31536000; includeSubDomains; preload'
+		);
+	}
 
 	return response;
 };

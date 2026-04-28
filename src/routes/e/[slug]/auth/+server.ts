@@ -86,6 +86,14 @@ export const POST: RequestHandler = async ({ params, request, cookies }) => {
 
 		const participant = await findParticipantByEmail(experimentId, email);
 		if (!participant) {
+			// NOTE: returning `{found: false}` here does leak whether the email
+			// is registered in this experiment (email-enumeration vulnerability).
+			// We accept this trade-off for the research-platform use case:
+			// participants are pre-invited and know whether they should register,
+			// and the alternative (email-verification tokens on every login) is
+			// a much heavier UX. If the threat model changes — e.g. the
+			// platform is opened up beyond pre-invited participants — revisit
+			// by introducing a token-based login flow.
 			return json({ found: false });
 		}
 

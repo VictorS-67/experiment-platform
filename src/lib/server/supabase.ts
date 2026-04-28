@@ -3,9 +3,13 @@ import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private';
 import { PUBLIC_SUPABASE_URL } from '$env/static/public';
 
 // Validate env vars at module load (fails fast on misconfiguration)
-if (!PUBLIC_SUPABASE_URL || !PUBLIC_SUPABASE_URL.startsWith('https://')) {
+const isValidSupabaseUrl =
+	PUBLIC_SUPABASE_URL &&
+	(PUBLIC_SUPABASE_URL.startsWith('https://') ||
+		/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?/.test(PUBLIC_SUPABASE_URL));
+if (!isValidSupabaseUrl) {
 	throw new Error(
-		`Invalid PUBLIC_SUPABASE_URL: expected "https://..." URL, got "${PUBLIC_SUPABASE_URL || '(empty)'}"`
+		`Invalid PUBLIC_SUPABASE_URL: expected https:// URL or local http://127.0.0.1, got "${PUBLIC_SUPABASE_URL || '(empty)'}"`
 	);
 }
 if (!SUPABASE_SERVICE_ROLE_KEY || SUPABASE_SERVICE_ROLE_KEY.length < 20) {

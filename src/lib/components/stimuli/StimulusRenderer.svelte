@@ -33,7 +33,7 @@
 	<VideoPlayer {item} {config} bind:mediaElement={mediaElement as HTMLVideoElement | undefined} />
 {:else if stimulusType === 'image'}
 	<div class="w-full rounded-lg overflow-hidden" id="stimulus-player">
-		<img src={resolveUrl(item)} alt={item.id} class="w-full" />
+		<img src={resolveUrl(item)} alt={i18n.localized(item.label, item.id)} class="w-full" />
 	</div>
 {:else if stimulusType === 'audio'}
 	<div class="w-full rounded-lg p-4 bg-gray-50 border" id="stimulus-player">

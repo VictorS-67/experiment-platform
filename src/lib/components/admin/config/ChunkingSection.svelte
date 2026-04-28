@@ -1,5 +1,6 @@
 <script lang="ts">
 	import LocalizedInput from '../LocalizedInput.svelte';
+	import Field from './Field.svelte';
 	import { updatePath } from './helpers';
 	import type { ExperimentConfig } from '$lib/config/schema';
 
@@ -35,8 +36,7 @@
 	</label>
 
 	{#if config.stimuli.chunking?.enabled}
-		<div>
-			<label class="block text-xs text-gray-500 mb-0.5">Min break between chunks (minutes)</label>
+		<Field label="Min break between chunks (minutes)" help="Participants must wait this long after finishing a chunk before starting the next.">
 			<input
 				type="number"
 				min="1"
@@ -45,12 +45,10 @@
 				class="w-40 px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
 				placeholder="No break required"
 			/>
-			<p class="text-xs text-gray-400 mt-0.5">Participants must wait this long after finishing a chunk before starting the next.</p>
-		</div>
+		</Field>
 
 		<div class="grid grid-cols-2 gap-3">
-			<div>
-				<label class="block text-xs text-gray-500 mb-0.5">Block Order</label>
+			<Field label="Block Order">
 				<select
 					value={config.stimuli.chunking.blockOrder ?? 'sequential'}
 					onchange={(e) => update(['stimuli', 'chunking', 'blockOrder'], e.currentTarget.value)}
@@ -60,9 +58,8 @@
 					<option value="latin-square">Latin Square</option>
 					<option value="random-per-participant">Random per participant</option>
 				</select>
-			</div>
-			<div>
-				<label class="block text-xs text-gray-500 mb-0.5">Within-Block Order</label>
+			</Field>
+			<Field label="Within-Block Order">
 				<select
 					value={config.stimuli.chunking.withinBlockOrder ?? 'random-per-participant'}
 					onchange={(e) => update(['stimuli', 'chunking', 'withinBlockOrder'], e.currentTarget.value)}
@@ -72,7 +69,7 @@
 					<option value="random">Random</option>
 					<option value="random-per-participant">Random per participant</option>
 				</select>
-			</div>
+			</Field>
 		</div>
 
 		<!-- Break Screen -->
@@ -94,12 +91,11 @@
 				<div class="space-y-2 pl-2 border-l-2 border-indigo-200">
 					<LocalizedInput label="Title" value={config.stimuli.chunking.breakScreen.title} {languages} onchange={(v) => update(['stimuli', 'chunking', 'breakScreen', 'title'], v)} />
 					<LocalizedInput label="Body" value={config.stimuli.chunking.breakScreen.body} {languages} multiline onchange={(v) => update(['stimuli', 'chunking', 'breakScreen', 'body'], v)} />
-					<div>
-						<label class="block text-xs text-gray-500 mb-0.5">Countdown (seconds, optional)</label>
+					<Field label="Countdown (seconds, optional)">
 						<input type="number" value={config.stimuli.chunking.breakScreen.duration ?? ''}
 							oninput={(e) => update(['stimuli', 'chunking', 'breakScreen', 'duration'], e.currentTarget.value ? e.currentTarget.valueAsNumber : undefined)}
 							class="w-32 px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="No delay" />
-					</div>
+					</Field>
 				</div>
 			{/if}
 		</div>
@@ -109,8 +105,7 @@
 			<div class="border border-dashed border-indigo-300 rounded p-3 bg-indigo-50/50">
 				<p class="text-xs font-medium text-indigo-700 mb-2">Auto-generate chunks from metadata</p>
 				<div class="flex items-end gap-2">
-					<div class="flex-1">
-						<label class="block text-xs text-gray-500 mb-0.5">Group by metadata key</label>
+					<Field label="Group by metadata key" class="block flex-1">
 						<select
 							id="chunk-gen-key"
 							class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
@@ -119,9 +114,8 @@
 								<option value={key}>{key}</option>
 							{/each}
 						</select>
-					</div>
-					<div class="w-24">
-						<label class="block text-xs text-gray-500 mb-0.5">Chunks</label>
+					</Field>
+					<Field label="Chunks" class="block w-24">
 						<input
 							type="number"
 							id="chunk-gen-count"
@@ -129,7 +123,7 @@
 							min="1"
 							class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
 						/>
-					</div>
+					</Field>
 					<button
 						type="button"
 						onclick={() => {
@@ -206,18 +200,16 @@
 						>Remove</button>
 					</div>
 					<div class="grid grid-cols-2 gap-2">
-						<div>
-							<label class="block text-xs text-gray-500 mb-0.5">ID</label>
+						<Field label="ID">
 							<input type="text" value={chunk.id}
 								oninput={(e) => update(['stimuli', 'chunking', 'chunks', String(ci), 'id'], e.currentTarget.value)}
 								class="w-full px-2 py-1 border border-gray-300 rounded text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-						</div>
-						<div>
-							<label class="block text-xs text-gray-500 mb-0.5">Slug (URL)</label>
+						</Field>
+						<Field label="Slug (URL)">
 							<input type="text" value={chunk.slug}
 								oninput={(e) => update(['stimuli', 'chunking', 'chunks', String(ci), 'slug'], e.currentTarget.value)}
 								class="w-full px-2 py-1 border border-gray-300 rounded text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-						</div>
+						</Field>
 					</div>
 					<LocalizedInput label="Label" value={chunk.label ?? {}} {languages} onchange={(v) => update(['stimuli', 'chunking', 'chunks', String(ci), 'label'], Object.values(v).some(Boolean) ? v : undefined)} />
 

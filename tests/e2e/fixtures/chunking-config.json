@@ -1,0 +1,81 @@
+{
+  "slug": "e2e-chunking",
+  "version": 1,
+  "status": "active",
+  "metadata": {
+    "title": { "en": "Chunking E2E" },
+    "languages": ["en"],
+    "defaultLanguage": "en"
+  },
+  "registration": {
+    "introduction": { "title": { "en": "Welcome" }, "body": { "en": "Register." } },
+    "fields": [
+      { "id": "age", "type": "number", "label": { "en": "Age" }, "required": true, "validation": { "min": 18, "max": 120 } }
+    ]
+  },
+  "tutorial": null,
+  "phases": [
+    {
+      "id": "p1",
+      "slug": "main",
+      "type": "stimulus-response",
+      "title": { "en": "Main" },
+      "responseWidgets": [
+        { "id": "rating", "type": "likert", "label": { "en": "Rate" }, "required": true, "config": { "min": 1, "max": 5 } }
+      ],
+      "stimulusOrder": "sequential",
+      "allowRevisit": true,
+      "allowMultipleResponses": false,
+      "completion": { "title": { "en": "Done" }, "body": { "en": "Thanks." } }
+    }
+  ],
+  "stimuli": {
+    "type": "text",
+    "source": "external-urls",
+    "items": [
+      { "id": "s01", "type": "text", "label": { "en": "item 1" } },
+      { "id": "s02", "type": "text", "label": { "en": "item 2" } },
+      { "id": "s03", "type": "text", "label": { "en": "item 3" } },
+      { "id": "s04", "type": "text", "label": { "en": "item 4" } },
+      { "id": "s05", "type": "text", "label": { "en": "item 5" } },
+      { "id": "s06", "type": "text", "label": { "en": "item 6" } },
+      { "id": "s07", "type": "text", "label": { "en": "item 7" } },
+      { "id": "s08", "type": "text", "label": { "en": "item 8" } },
+      { "id": "s09", "type": "text", "label": { "en": "item 9" } },
+      { "id": "s10", "type": "text", "label": { "en": "item 10" } },
+      { "id": "s11", "type": "text", "label": { "en": "item 11" } },
+      { "id": "s12", "type": "text", "label": { "en": "item 12" } }
+    ],
+    "chunking": {
+      "enabled": true,
+      "chunks": [
+        {
+          "id": "c1",
+          "slug": "c1",
+          "label": { "en": "Chunk 1" },
+          "blocks": [
+            { "id": "b1", "label": { "en": "Block A" }, "stimulusIds": ["s01", "s02", "s03"] },
+            { "id": "b2", "label": { "en": "Block B" }, "stimulusIds": ["s04", "s05", "s06"] },
+            { "id": "b3", "label": { "en": "Block C" }, "stimulusIds": ["s07", "s08", "s09"] }
+          ]
+        },
+        {
+          "id": "c2",
+          "slug": "c2",
+          "label": { "en": "Chunk 2" },
+          "blocks": [
+            { "id": "b4", "label": { "en": "Block D" }, "stimulusIds": ["s10", "s11", "s12"] }
+          ]
+        }
+      ],
+      "blockOrder": "latin-square",
+      "withinBlockOrder": "random-per-participant",
+      "minBreakMinutes": 0
+    }
+  },
+  "completion": {
+    "title": { "en": "All done" },
+    "body": { "en": "Thank you." },
+    "feedbackWidgets": []
+  }
+}

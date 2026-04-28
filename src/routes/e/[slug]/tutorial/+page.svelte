@@ -131,6 +131,7 @@
 				</p>
 				<div class="flex gap-4 justify-center">
 					<button
+						type="button"
 						id="gatekeeper-yes"
 						class="px-6 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors cursor-pointer"
 						onclick={handleGatekeeperYes}
@@ -138,6 +139,7 @@
 						{i18n.localized(firstPhase.gatekeeperQuestion.yesLabel, i18n.platform('common.yes'))}
 					</button>
 					<button
+						type="button"
 						id="gatekeeper-no"
 						class="px-6 py-2 bg-gray-400 text-white rounded hover:bg-gray-500 transition-colors cursor-pointer"
 						onclick={handleGatekeeperNo}

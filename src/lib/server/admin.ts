@@ -1,25 +1,42 @@
 import { getServerSupabase } from './supabase';
+import { listAccessibleExperimentIds } from './collaborators';
+import { ExperimentConfigSchema, type ExperimentConfig } from '$lib/config/schema';
 
-export async function listExperiments() {
+/**
+ * Parse and validate raw JSONB config loaded from the database. Throws if it
+ * fails — callers may catch and downgrade to a "needs migration" state, but
+ * we never want to silently serve malformed configs to participants.
+ *
+ * Use this on EVERY read path (admin or participant) that returns config to
+ * downstream code, not just on writes.
+ */
+export function parseStoredConfig(raw: unknown): ExperimentConfig {
+	return ExperimentConfigSchema.parse(raw);
+}
+
+export async function listExperiments(adminUserId: string) {
 	const supabase = getServerSupabase();
+	const accessibleIds = await listAccessibleExperimentIds(adminUserId);
+	if (accessibleIds.length === 0) return [];
 
 	const { data: experiments, error } = await supabase
 		.from('experiments')
 		.select('id, slug, status, config, created_at, updated_at')
+		.in('id', accessibleIds)
 		.order('created_at', { ascending: false });
 
 	if (error) { console.error('Failed to list experiments:', error); throw new Error('Failed to list experiments'); }
 
-	// Get participant counts per experiment
+	// Participant counts via the experiment_participant_counts view
+	// (migration 020) — one aggregate scan instead of streaming every row.
 	const { data: counts } = await supabase
-		.from('participants')
-		.select('experiment_id');
+		.from('experiment_participant_counts')
+		.select('experiment_id, participant_count')
+		.in('experiment_id', accessibleIds);
 
 	const countMap: Record<string, number> = {};
-	if (counts) {
-		for (const row of counts) {
-			countMap[row.experiment_id] = (countMap[row.experiment_id] || 0) + 1;
-		}
+	for (const row of counts ?? []) {
+		countMap[row.experiment_id as string] = row.participant_count as number;
 	}
 
 	return (experiments || []).map((exp) => ({
@@ -46,22 +63,39 @@ export async function getExperiment(id: string) {
 	return data;
 }
 
-export async function createExperiment(slug: string, config: Record<string, unknown>) {
+export async function createExperiment(
+	slug: string,
+	config: ExperimentConfig,
+	createdBy: string
+) {
 	const supabase = getServerSupabase();
+	// Re-validate the inbound config — defense-in-depth against any caller
+	// that bypassed the schema.
+	const validated = parseStoredConfig(config);
 	const { data, error } = await supabase
 		.from('experiments')
-		.insert({ slug, config, status: 'draft' })
+		.insert({ slug, config: validated, status: 'draft', created_by: createdBy })
 		.select('id')
 		.single();
 
-	if (error) { console.error('Failed to create experiment:', error); throw new Error('Failed to create experiment'); }
+	if (error) {
+		// 23505 = Postgres unique_violation. The experiments.slug column is
+		// UNIQUE — surface that cleanly so the admin sees "Slug already taken"
+		// instead of the opaque "Failed to create experiment".
+		if ((error as { code?: string }).code === '23505') {
+			throw new Error(`Slug "${slug}" is already taken. Pick a different one.`);
+		}
+		console.error('Failed to create experiment:', error);
+		throw new Error('Failed to create experiment');
+	}
 	return data;
 }
 
 export async function updateExperiment(
 	id: string,
-	updates: { config?: Record<string, unknown>; status?: string; slug?: string }
+	updates: { config?: ExperimentConfig; status?: string; slug?: string }
 ) {
+	if (updates.config !== undefined) parseStoredConfig(updates.config);
 	const supabase = getServerSupabase();
 	const updateData: Record<string, unknown> = { updated_at: new Date().toISOString() };
 
@@ -77,7 +111,7 @@ export async function updateExperiment(
 	if (error) { console.error('Failed to update experiment:', error); throw new Error('Failed to update experiment'); }
 }
 
-export async function duplicateExperiment(id: string) {
+export async function duplicateExperiment(id: string, duplicatedBy: string) {
 	const supabase = getServerSupabase();
 	const source = await getExperiment(id);
 	if (!source) throw new Error('Experiment not found');
@@ -91,9 +125,12 @@ export async function duplicateExperiment(id: string) {
 		newSlug = `${source.slug}-copy-${attempt}`;
 	}
 
-	const newConfig = structuredClone(source.config) as Record<string, unknown>;
-	newConfig.slug = newSlug;
-	return createExperiment(newSlug, newConfig);
+	// Validate the source config before copying — if it's a stale config that
+	// no longer matches the current schema, fail loudly here rather than
+	// silently producing a broken duplicate.
+	const cloned = parseStoredConfig(structuredClone(source.config));
+	cloned.slug = newSlug;
+	return createExperiment(newSlug, cloned, duplicatedBy);
 }
 
 export async function deleteExperiment(id: string) {
@@ -106,7 +143,8 @@ export async function deleteExperiment(id: string) {
 	if (error) { console.error('Failed to delete experiment:', error); throw new Error('Failed to delete experiment'); }
 }
 
-export async function saveConfigVersion(experimentId: string, config: unknown) {
+export async function saveConfigVersion(experimentId: string, config: ExperimentConfig) {
+	parseStoredConfig(config);
 	const supabase = getServerSupabase();
 	const { error } = await supabase.rpc('insert_config_version', {
 		exp_id: experimentId,
@@ -133,9 +171,10 @@ export class ConfigConflictError extends Error {
 
 export async function saveConfigWithVersion(
 	experimentId: string,
-	config: unknown,
+	config: ExperimentConfig,
 	options: { newSlug?: string; expectedUpdatedAt?: string } = {}
 ): Promise<{ versionNumber: number; updatedAt: string }> {
+	parseStoredConfig(config);
 	const supabase = getServerSupabase();
 	const { data, error } = await supabase.rpc('upsert_config_with_version', {
 		exp_id: experimentId,
@@ -170,7 +209,11 @@ export async function listConfigVersions(experimentId: string) {
 	return data || [];
 }
 
-export async function rollbackToVersion(experimentId: string, versionId: string) {
+export async function rollbackToVersion(
+	experimentId: string,
+	versionId: string,
+	options: { expectedUpdatedAt?: string } = {}
+) {
 	const supabase = getServerSupabase();
 	const { data: version, error } = await supabase
 		.from('experiment_config_versions')
@@ -181,7 +224,17 @@ export async function rollbackToVersion(experimentId: string, versionId: string)
 
 	if (error || !version) throw new Error('Version not found');
 
-	await saveConfigWithVersion(experimentId, version.config);
+	// Re-validate the historical config before re-publishing it. If the schema
+	// has tightened since this version was saved, this will throw — the admin
+	// can then run scripts/migrate-configs.js or roll back to a different
+	// version instead of restoring a config that the runtime will reject.
+	const validated = parseStoredConfig(version.config);
+	// Pass through the caller's optimistic-lock timestamp so a rollback
+	// issued against a stale view of the versions tab is rejected with
+	// ConfigConflictError — same guarantee as a regular config save.
+	await saveConfigWithVersion(experimentId, validated, {
+		expectedUpdatedAt: options.expectedUpdatedAt
+	});
 }
 
 export async function getParticipants(experimentId: string) {
@@ -194,17 +247,17 @@ export async function getParticipants(experimentId: string) {
 
 	if (error) { console.error('Failed to load participants:', error); throw new Error('Failed to load participants'); }
 
-	// Get response counts per participant
-	// TODO: replace with a DB-side count() query when participant counts grow large
-	const { data: responses } = await supabase
-		.from('responses')
-		.select('participant_id')
-		.eq('experiment_id', experimentId);
-
+	// Response counts via participant_response_counts view (migration 020).
+	// Scoped to just the participants we're about to return.
+	const participantIds = (data ?? []).map((p) => p.id);
 	const countMap: Record<string, number> = {};
-	if (responses) {
-		for (const row of responses) {
-			countMap[row.participant_id] = (countMap[row.participant_id] || 0) + 1;
+	if (participantIds.length) {
+		const { data: counts } = await supabase
+			.from('participant_response_counts')
+			.select('participant_id, response_count')
+			.in('participant_id', participantIds);
+		for (const row of counts ?? []) {
+			countMap[row.participant_id as string] = row.response_count as number;
 		}
 	}
 
@@ -214,16 +267,23 @@ export async function getParticipants(experimentId: string) {
 	}));
 }
 
-export async function getParticipantDetail(participantId: string) {
+/**
+ * Fetch participant detail. If `experimentId` is given, the participant must
+ * belong to that experiment — otherwise this throws "Participant not found"
+ * to avoid IDOR (admin A snooping participants from admin B's experiment by
+ * guessing the UUID).
+ */
+export async function getParticipantDetail(participantId: string, experimentId?: string) {
 	const supabase = getServerSupabase();
 
-	const { data: participant, error: pErr } = await supabase
+	let query = supabase
 		.from('participants')
-		.select('id, email, registration_data, registered_at')
-		.eq('id', participantId)
-		.single();
+		.select('id, email, experiment_id, registration_data, registered_at')
+		.eq('id', participantId);
+	if (experimentId) query = query.eq('experiment_id', experimentId);
+	const { data: participant, error: pErr } = await query.single();
 
-	if (pErr || !participant) throw new Error('Participant not found');
+	if (pErr || !participant) return null;
 
 	const { data: responses, error: rErr } = await supabase
 		.from('responses')
@@ -254,52 +314,81 @@ export async function getParticipantDetail(participantId: string) {
 	return { participant, responsesByPhase };
 }
 
-export async function deleteParticipant(participantId: string) {
+// All three helpers below run under the service-role key, which bypasses RLS.
+// The route-level requireExperimentAccess() gate authorizes the *caller* on
+// a specific experiment, but the helpers themselves must re-bind their query
+// to that same experiment — otherwise an editor on B can delete participants
+// from A by submitting their UUIDs to /admin/experiments/B/data?/bulkDelete.
+
+export async function deleteParticipant(experimentId: string, participantId: string) {
 	const supabase = getServerSupabase();
-	const { error } = await supabase.from('participants').delete().eq('id', participantId);
+	const { error } = await supabase
+		.from('participants')
+		.delete()
+		.eq('id', participantId)
+		.eq('experiment_id', experimentId);
 	if (error) { console.error('Failed to delete participant:', error); throw new Error('Failed to delete participant'); }
 }
 
-export async function resetParticipantResponses(participantId: string) {
+export async function resetParticipantResponses(experimentId: string, participantId: string) {
 	const supabase = getServerSupabase();
+	// Verify the participant belongs to the experiment before nuking their
+	// responses. Doing this as a guard rather than a join-on-delete because
+	// `responses` doesn't carry experiment_id directly — it's reachable via
+	// participant_id, and an unscoped delete would obey only the (untrusted)
+	// participantId from form data.
+	const { data: owner, error: lookupErr } = await supabase
+		.from('participants')
+		.select('id')
+		.eq('id', participantId)
+		.eq('experiment_id', experimentId)
+		.maybeSingle();
+	if (lookupErr) { console.error('Failed to verify participant ownership:', lookupErr); throw new Error('Failed to reset responses'); }
+	if (!owner) throw new Error('Participant not found');
+
 	const { error } = await supabase.from('responses').delete().eq('participant_id', participantId);
 	if (error) { console.error('Failed to reset responses:', error); throw new Error('Failed to reset responses'); }
 }
 
-export async function deleteParticipants(participantIds: string[]) {
+export async function deleteParticipants(experimentId: string, participantIds: string[]) {
 	if (participantIds.length === 0) return;
 	const supabase = getServerSupabase();
-	const { error } = await supabase.from('participants').delete().in('id', participantIds);
+	const { error } = await supabase
+		.from('participants')
+		.delete()
+		.in('id', participantIds)
+		.eq('experiment_id', experimentId);
 	if (error) { console.error('Failed to delete participants:', error); throw new Error('Failed to delete participants'); }
 }
 
 export async function getExperimentStats(experimentId: string) {
 	const supabase = getServerSupabase();
 
-	// TODO: replace with a DB-side aggregate when response volume grows large
-	const { data: responses } = await supabase
-		.from('responses')
-		.select('phase_id, stimulus_id, participant_id')
-		.eq('experiment_id', experimentId);
-
-	const byPhase: Record<string, Set<string>> = {};
-	const byStimulusCount: Record<string, number> = {};
-
-	for (const r of responses ?? []) {
-		if (!byPhase[r.phase_id]) byPhase[r.phase_id] = new Set();
-		byPhase[r.phase_id].add(r.participant_id);
-		byStimulusCount[r.stimulus_id] = (byStimulusCount[r.stimulus_id] || 0) + 1;
-	}
+	// Aggregates via DB views (migration 020): phase_participant_counts and
+	// stimulus_response_counts do the GROUP BY server-side so we only
+	// transfer one row per phase / per stimulus instead of one per response.
+	const [phaseResult, stimulusResult] = await Promise.all([
+		supabase
+			.from('phase_participant_counts')
+			.select('phase_id, participants_started')
+			.eq('experiment_id', experimentId),
+		supabase
+			.from('stimulus_response_counts')
+			.select('stimulus_id, response_count')
+			.eq('experiment_id', experimentId)
+	]);
 
 	return {
-		byPhase: Object.entries(byPhase).map(([phaseId, set]) => ({
-			phaseId,
-			participantsStarted: set.size
+		byPhase: (phaseResult.data ?? []).map((row) => ({
+			phaseId: row.phase_id as string,
+			participantsStarted: row.participants_started as number
 		})),
-		byStimulusCount: Object.entries(byStimulusCount).map(([stimulusId, responseCount]) => ({
-			stimulusId,
-			responseCount
-		})).sort((a, b) => a.responseCount - b.responseCount)
+		byStimulusCount: (stimulusResult.data ?? [])
+			.map((row) => ({
+				stimulusId: row.stimulus_id as string,
+				responseCount: row.response_count as number
+			}))
+			.sort((a, b) => a.responseCount - b.responseCount)
 	};
 }
 

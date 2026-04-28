@@ -1,9 +1,11 @@
 import type { PageServerLoad, Actions } from './$types';
 import { error, fail } from '@sveltejs/kit';
 import { getExperiment, getParticipants, deleteParticipants, getExperimentStats, getChunkProgress } from '$lib/server/admin';
+import { requireExperimentAccess } from '$lib/server/collaborators';
 
 export const load: PageServerLoad = async ({ params, locals }) => {
-	if (!locals.adminUser) error(401, 'Unauthorized');
+	await requireExperimentAccess(locals.adminUser, params.id, 'viewer');
+
 	const experiment = await getExperiment(params.id);
 	if (!experiment) error(404, 'Experiment not found');
 
@@ -17,7 +19,6 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 			: Promise.resolve(null)
 	]);
 
-	// Serialize Map to plain object for page data
 	const chunkProgress = chunkProgressMap
 		? Object.fromEntries(chunkProgressMap)
 		: null;
@@ -26,13 +27,13 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 };
 
 export const actions: Actions = {
-	bulkDelete: async ({ request, locals }) => {
-		if (!locals.adminUser) return fail(401, { error: 'Unauthorized' });
+	bulkDelete: async ({ request, params, locals }) => {
+		await requireExperimentAccess(locals.adminUser, params.id, 'editor');
 		const formData = await request.formData();
 		const ids = formData.getAll('participantIds') as string[];
 		if (ids.length === 0) return fail(400, { error: 'No participants selected.' });
 		try {
-			await deleteParticipants(ids);
+			await deleteParticipants(params.id, ids);
 			return { success: true };
 		} catch (err) {
 			return fail(500, { error: err instanceof Error ? err.message : 'Failed to delete.' });

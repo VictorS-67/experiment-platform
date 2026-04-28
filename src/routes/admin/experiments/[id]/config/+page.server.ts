@@ -1,11 +1,14 @@
 import type { Actions } from './$types';
 import { fail } from '@sveltejs/kit';
 import { saveConfigWithVersion, ConfigConflictError } from '$lib/server/admin';
+import { requireExperimentAccess } from '$lib/server/collaborators';
 import { ExperimentConfigSchema } from '$lib/config/schema';
+import { logAdminAction } from '$lib/server/audit';
 
 export const actions: Actions = {
-	saveConfig: async ({ request, params, locals }) => {
-		if (!locals.adminUser) return fail(401, { error: 'Unauthorized' });
+	saveConfig: async ({ request, params, locals, getClientAddress }) => {
+		await requireExperimentAccess(locals.adminUser, params.id, 'editor');
+
 		const formData = await request.formData();
 		const configJson = formData.get('config') as string;
 		const expectedUpdatedAt = (formData.get('expectedUpdatedAt') as string | null) || undefined;
@@ -24,9 +27,19 @@ export const actions: Actions = {
 		}
 
 		try {
-			const { updatedAt } = await saveConfigWithVersion(params.id, result.data, {
+			const { updatedAt, versionNumber } = await saveConfigWithVersion(params.id, result.data, {
 				newSlug: result.data.slug,
 				expectedUpdatedAt
+			});
+			await logAdminAction({
+				adminUserId: locals.adminUser!.id,
+				adminEmail: locals.adminUser!.email,
+				experimentId: params.id,
+				action: 'config.save',
+				resourceType: 'experiment',
+				resourceId: params.id,
+				metadata: { versionNumber },
+				ip: getClientAddress()
 			});
 			return { success: true, updatedAt };
 		} catch (err) {

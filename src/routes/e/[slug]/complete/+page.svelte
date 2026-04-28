@@ -15,12 +15,16 @@
 	let completion = $derived(config?.completion);
 	let feedbackWidgets: ResponseWidgetType[] = $derived(completion?.feedbackWidgets ?? []);
 
+	// Initial widget values come from the config's feedback widget list at
+	// mount time; we intentionally don't reset these if `data` changes.
+	// svelte-ignore state_referenced_locally
 	let widgetValues = $state<Record<string, string>>(
 		Object.fromEntries(
 			(data.experiment.config?.completion?.feedbackWidgets ?? []).map((w) => [w.id, ''])
 		)
 	);
 	let saving = $state(false);
+	// svelte-ignore state_referenced_locally
 	let submitted = $state(!!data.existingFeedback);
 	let message = $state<{ type: 'success' | 'error'; text: string } | null>(null);
 

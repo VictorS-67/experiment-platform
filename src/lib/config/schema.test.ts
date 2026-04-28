@@ -288,7 +288,12 @@ describe('ExperimentConfigSchema', () => {
 								condition: { stimulusId: 'v1', widgetId: 'w1', operator: 'equals', value: 'no' }
 							}
 						],
-						responseWidgets: [{ id: 'w1', type: 'select', label: { en: 'Q' } }],
+						responseWidgets: [
+							{
+								id: 'w1', type: 'select', label: { en: 'Q' },
+								config: { options: [{ value: 'no', label: { en: 'No' } }, { value: 'yes', label: { en: 'Yes' } }] }
+							}
+						],
 						completion: { title: { en: 'Done' }, body: { en: 'Done' } }
 					}
 				]
@@ -310,7 +315,12 @@ describe('ExperimentConfigSchema', () => {
 						branchRules: [
 							{ condition: { widgetId: 'w1', operator: 'equals', value: 'yes' }, nextPhaseSlug: 'follow-up' }
 						],
-						responseWidgets: [{ id: 'w1', type: 'select', label: { en: 'Q' } }],
+						responseWidgets: [
+							{
+								id: 'w1', type: 'select', label: { en: 'Q' },
+								config: { options: [{ value: 'yes', label: { en: 'Yes' } }, { value: 'no', label: { en: 'No' } }] }
+							}
+						],
 						completion: { title: { en: 'Done' }, body: { en: 'Done' } }
 					},
 					{
@@ -400,6 +410,197 @@ describe('ExperimentConfigSchema', () => {
 			expect(result.data.stimuli.chunking?.breakScreen?.duration).toBeUndefined();
 		}
 	});
+
+	// ---------- Negative cases for the new refinements ----------
+
+	it('rejects unknown language code in LocalizedString (catches `jn` typo)', () => {
+		const result = ExperimentConfigSchema.safeParse(
+			makeMinimalConfig({
+				metadata: {
+					title: { en: 'Test', jn: '' },
+					languages: ['en'],
+					defaultLanguage: 'en'
+				}
+			})
+		);
+		expect(result.success).toBe(false);
+	});
+
+	it('rejects review phase missing reviewConfig', () => {
+		const result = ExperimentConfigSchema.safeParse(
+			makeMinimalConfig({
+				phases: [
+					{
+						id: 'p1',
+						slug: 'review-it',
+						type: 'review',
+						title: { en: 'Review' },
+						completion: { title: { en: 'Done' }, body: { en: 'Done' } }
+					}
+				]
+			})
+		);
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error.issues.some((i) => i.message.includes('requires reviewConfig'))).toBe(true);
+		}
+	});
+
+	it('rejects stimulus-response phase that has reviewConfig', () => {
+		const result = ExperimentConfigSchema.safeParse(
+			makeMinimalConfig({
+				phases: [
+					{
+						id: 'p1',
+						slug: 'survey',
+						type: 'stimulus-response',
+						title: { en: 'Survey' },
+						reviewConfig: { sourcePhase: 'p1', responseWidgets: [] },
+						completion: { title: { en: 'Done' }, body: { en: 'Done' } }
+					}
+				]
+			})
+		);
+		expect(result.success).toBe(false);
+	});
+
+	it('rejects review phase whose sourcePhase points at unknown phase', () => {
+		const result = ExperimentConfigSchema.safeParse(
+			makeMinimalConfig({
+				phases: [
+					{
+						id: 'p1',
+						slug: 'survey',
+						type: 'stimulus-response',
+						title: { en: 'Survey' },
+						completion: { title: { en: 'Done' }, body: { en: 'Done' } }
+					},
+					{
+						id: 'r1',
+						slug: 'review-it',
+						type: 'review',
+						title: { en: 'Review' },
+						reviewConfig: { sourcePhase: 'does-not-exist', responseWidgets: [] },
+						completion: { title: { en: 'Done' }, body: { en: 'Done' } }
+					}
+				]
+			})
+		);
+		expect(result.success).toBe(false);
+	});
+
+	it('rejects skipRule whose target stimulus does not exist', () => {
+		const result = ExperimentConfigSchema.safeParse(
+			makeMinimalConfig({
+				phases: [
+					{
+						id: 'p1', slug: 'survey', type: 'stimulus-response', title: { en: 'Survey' },
+						responseWidgets: [{ id: 'w1', type: 'text', label: { en: 'Q' } }],
+						skipRules: [{
+							targetStimulusId: 'ghost',
+							condition: { stimulusId: 'v1', widgetId: 'w1', operator: 'equals', value: 'no' }
+						}],
+						completion: { title: { en: 'Done' }, body: { en: 'Done' } }
+					}
+				]
+			})
+		);
+		expect(result.success).toBe(false);
+	});
+
+	it('rejects branchRule pointing at unknown phase slug', () => {
+		const result = ExperimentConfigSchema.safeParse(
+			makeMinimalConfig({
+				phases: [
+					{
+						id: 'p1', slug: 'survey', type: 'stimulus-response', title: { en: 'Survey' },
+						responseWidgets: [{ id: 'w1', type: 'text', label: { en: 'Q' } }],
+						branchRules: [
+							{ condition: { widgetId: 'w1', operator: 'equals', value: 'yes' }, nextPhaseSlug: 'nowhere' }
+						],
+						completion: { title: { en: 'Done' }, body: { en: 'Done' } }
+					}
+				]
+			})
+		);
+		expect(result.success).toBe(false);
+	});
+
+	it('rejects select widget with no options', () => {
+		const result = ExperimentConfigSchema.safeParse(
+			makeMinimalConfig({
+				phases: [
+					{
+						id: 'p1', slug: 'survey', type: 'stimulus-response', title: { en: 'Survey' },
+						responseWidgets: [{ id: 'w1', type: 'select', label: { en: 'Q' } }],
+						completion: { title: { en: 'Done' }, body: { en: 'Done' } }
+					}
+				]
+			})
+		);
+		expect(result.success).toBe(false);
+	});
+
+	it('rejects likert widget without min/max', () => {
+		const result = ExperimentConfigSchema.safeParse(
+			makeMinimalConfig({
+				phases: [
+					{
+						id: 'p1', slug: 'survey', type: 'stimulus-response', title: { en: 'Survey' },
+						responseWidgets: [{ id: 'w1', type: 'likert', label: { en: 'Q' } }],
+						completion: { title: { en: 'Done' }, body: { en: 'Done' } }
+					}
+				]
+			})
+		);
+		expect(result.success).toBe(false);
+	});
+
+	it('rejects chunking block referencing unknown stimulus id', () => {
+		const result = ExperimentConfigSchema.safeParse(
+			makeMinimalConfig({
+				stimuli: {
+					type: 'video',
+					items: [{ id: 'v1', filename: 'a.mp4' }],
+					chunking: {
+						enabled: true,
+						chunks: [{
+							id: 'c1', slug: 'c-1',
+							blocks: [{ id: 'b1', stimulusIds: ['v1', 'ghost'] }]
+						}]
+					}
+				}
+			})
+		);
+		expect(result.success).toBe(false);
+	});
+
+	it('rejects defaultLanguage not in languages list', () => {
+		const result = ExperimentConfigSchema.safeParse(
+			makeMinimalConfig({
+				metadata: {
+					title: { en: 'T' },
+					languages: ['en'],
+					defaultLanguage: 'ja'
+				}
+			})
+		);
+		expect(result.success).toBe(false);
+	});
+
+	it('rejects stimulus metadata with object value (no longer z.any())', () => {
+		const result = ExperimentConfigSchema.safeParse(
+			makeMinimalConfig({
+				stimuli: {
+					type: 'video',
+					items: [{ id: 'v1', metadata: { tags: { nested: 'object' } } }]
+				}
+			})
+		);
+		expect(result.success).toBe(false);
+	});
+
+	// ---------- end negative cases ----------
 
 	it('validates response widget with stepNumber and stepLabel', () => {
 		const result = ExperimentConfigSchema.safeParse(

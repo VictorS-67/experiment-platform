@@ -1,6 +1,6 @@
 <script lang="ts">
 	import Modal from '$lib/components/layout/Modal.svelte';
-	import type { ExperimentConfig, StimulusItemType } from '$lib/config/schema';
+	import { StimulusItemSchema, type ExperimentConfig, type StimulusItemType } from '$lib/config/schema';
 	import {
 		compileFilenamePattern,
 		extractMetadata,
@@ -15,6 +15,7 @@
 		config,
 		experimentId,
 		initialMode = 'storage',
+		initialStrategy = 'append',
 		onclose,
 		onimport
 	}: {
@@ -22,6 +23,7 @@
 		config: ExperimentConfig;
 		experimentId: string;
 		initialMode?: 'storage' | 'csv';
+		initialStrategy?: 'append' | 'replace';
 		onclose: () => void;
 		onimport: (items: StimulusItemType[], newMetadataKeys: string[], strategy: 'append' | 'replace') => void;
 	} = $props();
@@ -70,7 +72,7 @@
 			csvParsed = null;
 			candidates = [];
 			selectedCandidates = new Set();
-			mergeStrategy = 'append';
+			mergeStrategy = initialStrategy;
 			previewSearch = '';
 			previewPage = 0;
 		}
@@ -317,14 +319,34 @@
 	let duplicateCount = $derived(candidates.filter(c => c.duplicate && selectedCandidates.has(c.id)).length);
 
 	// --- Import ---
+	let importError = $state<string | null>(null);
+
 	function doImport() {
-		const items: StimulusItemType[] = candidates
-			.filter(c => selectedCandidates.has(c.id))
-			.map(c => ({
-				id: c.id,
-				filename: c.filename,
-				...(c.metadata && Object.keys(c.metadata).length > 0 ? { metadata: c.metadata } : {})
-			}));
+		importError = null;
+
+		// Validate every candidate against the canonical StimulusItem schema
+		// before handing them up. Catches things like non-string metadata
+		// values from a malformed CSV that would otherwise pass straight into
+		// the experiment config and fail validation only on the next save.
+		const items: StimulusItemType[] = [];
+		const failures: string[] = [];
+		for (const c of candidates) {
+			if (!selectedCandidates.has(c.id)) continue;
+			const candidate: Record<string, unknown> = { id: c.id, filename: c.filename };
+			if (c.metadata && Object.keys(c.metadata).length > 0) candidate.metadata = c.metadata;
+
+			const result = StimulusItemSchema.safeParse(candidate);
+			if (result.success) {
+				items.push(result.data);
+			} else {
+				failures.push(`${c.id}: ${result.error.issues.map((i) => i.message).join('; ')}`);
+			}
+		}
+
+		if (failures.length) {
+			importError = `Skipped ${failures.length} invalid item(s):\n${failures.slice(0, 5).join('\n')}${failures.length > 5 ? `\n…and ${failures.length - 5} more` : ''}`;
+			return;
+		}
 
 		// Collect metadata keys from pattern + CSV
 		const newKeys: string[] = [];
@@ -444,13 +466,13 @@
 					<div class="border-t border-gray-200 pt-3 space-y-2">
 						<label class="block text-xs text-gray-500">
 							Filename pattern <span class="text-gray-400">(optional — extract metadata from filenames)</span>
+							<input
+								type="text"
+								bind:value={filenamePattern}
+								placeholder="e.g. {'{emotion}'}-{'{actor}'}-{'{take}'}.mp4"
+								class="mt-1 w-full px-2 py-1 border border-gray-300 rounded text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+							/>
 						</label>
-						<input
-							type="text"
-							bind:value={filenamePattern}
-							placeholder="e.g. {'{emotion}'}-{'{actor}'}-{'{take}'}.mp4"
-							class="w-full px-2 py-1 border border-gray-300 rounded text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
-						/>
 						{#if patternResult && patternPreview.length > 0}
 							<div class="text-xs space-y-1">
 								<p class="text-gray-500">Preview ({patternResult.keys.join(', ')}):</p>
@@ -475,8 +497,8 @@
 					<div class="border-t border-gray-200 pt-3 space-y-2">
 						<label class="block text-xs text-gray-500">
 							CSV metadata enrichment <span class="text-gray-400">(optional — upload a CSV to add metadata by filename)</span>
+							<input type="file" accept=".csv,.tsv,.txt" onchange={handleCSVFile} class="mt-1 text-xs" />
 						</label>
-						<input type="file" accept=".csv,.tsv,.txt" onchange={handleCSVFile} class="text-xs" />
 						{#if csvParsed}
 							<p class="text-xs text-green-700">
 								{csvParsed.rows.length} rows, columns: {csvParsed.headers.join(', ')}
@@ -492,18 +514,20 @@
 		{:else}
 			<!-- CSV import -->
 			<div class="space-y-3">
-				<div>
-					<label class="block text-xs text-gray-500 mb-1">Upload CSV file</label>
+				<label class="block">
+					<span class="block text-xs text-gray-500 mb-1">Upload CSV file</span>
 					<input type="file" accept=".csv,.tsv,.txt" onchange={handleCSVFile} class="text-xs" />
-				</div>
+				</label>
 				<div>
-					<label class="block text-xs text-gray-500 mb-1">Or paste CSV content</label>
-					<textarea
-						bind:value={csvText}
-						rows={6}
-						class="w-full px-2 py-1 border border-gray-300 rounded text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
-						placeholder="filename,emotion,actor&#10;anger-1.mp4,anger,john&#10;joy-2.mp4,joy,jane"
-					></textarea>
+					<label class="block">
+						<span class="block text-xs text-gray-500 mb-1">Or paste CSV content</span>
+						<textarea
+							bind:value={csvText}
+							rows={6}
+							class="w-full px-2 py-1 border border-gray-300 rounded text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+							placeholder="filename,emotion,actor&#10;anger-1.mp4,anger,john&#10;joy-2.mp4,joy,jane"
+						></textarea>
+					</label>
 					<button
 						type="button"
 						onclick={doParseCSV}
@@ -660,6 +684,12 @@
 					<span class="text-xs text-gray-500">{previewSafePage + 1} / {previewPageCount}</span>
 					<button type="button" disabled={previewSafePage >= previewPageCount - 1} onclick={() => previewPage = previewSafePage + 1}
 						class="px-2 py-1 text-xs border border-gray-300 rounded hover:bg-gray-50 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed">&gt;</button>
+				</div>
+			{/if}
+
+			{#if importError}
+				<div class="mt-2 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+					<pre class="whitespace-pre-wrap font-sans">{importError}</pre>
 				</div>
 			{/if}
 

@@ -61,10 +61,14 @@
 		}
 		const rawItems = config?.stimuli?.items ?? [];
 
-		// Chunked route: server already computed the ordered stimulus IDs
-		if (data.orderedStimulusIds) {
+		// Chunked route: server already computed the ordered stimulus IDs.
+		// `orderedStimulusIds` is only present on the chunked variant of the
+		// loader — cast to read it without forcing the non-chunked PageData
+		// shape to declare a field it never returns.
+		const orderedStimulusIds = (data as { orderedStimulusIds?: string[] }).orderedStimulusIds;
+		if (orderedStimulusIds) {
 			const itemMap = new Map(rawItems.map(s => [s.id, s]));
-			return (data.orderedStimulusIds as string[])
+			return orderedStimulusIds
 				.map(id => itemMap.get(id))
 				.filter((s): s is typeof rawItems[number] => !!s);
 		}
@@ -139,6 +143,17 @@
 		showGatekeeper = true;
 		showWidgets = false;
 		randomOrderSeed = crypto.randomUUID();
+	});
+
+	// Always clear any running break timers when the component unmounts
+	// (e.g. participant navigates to a different phase mid-countdown). Without
+	// this, the intervals keep ticking and decrement state on a destroyed
+	// component, leaking memory and risking onMount/onDestroy ordering bugs.
+	$effect(() => {
+		return () => {
+			if (breakTimerInterval) { clearInterval(breakTimerInterval); breakTimerInterval = undefined; }
+			if (nextChunkTimerInterval) { clearInterval(nextChunkTimerInterval); nextChunkTimerInterval = undefined; }
+		};
 	});
 
 	// Initialize from server-loaded data

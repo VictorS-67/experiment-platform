@@ -13,10 +13,15 @@
 		showConfigControls: boolean;
 	}>('configEditorState');
 
-	// Form editor state
+	// Form editor state — deliberately a one-shot clone of the server-loaded
+	// config. If `data.experiment.config` changes while the user is editing
+	// (e.g. navigation round-trip), we do NOT want to blow away their in-flight
+	// edits; they'll see the updated-at conflict on save instead.
+	// svelte-ignore state_referenced_locally
 	let configState = $state<ExperimentConfig>(structuredClone(data.experiment.config));
 
-	// JSON editor state
+	// JSON editor state — same one-shot pattern as configState above.
+	// svelte-ignore state_referenced_locally
 	let configJson = $state(JSON.stringify(data.experiment.config, null, 2));
 	let jsonError = $state<string | null>(null);
 
@@ -27,6 +32,11 @@
 	let expectedUpdatedAt = $derived(form?.updatedAt ?? data.experiment.updated_at);
 
 	let saving = $state(false);
+
+	// Viewers (read-only role) should not see edit affordances. The server
+	// rejects their save POST with 403 anyway, but a button they can't use is
+	// confusing UX.
+	let canEdit = $derived(data.myRole === 'owner' || data.myRole === 'editor');
 
 	let toast = $state<{ type: 'success' | 'error'; message: string } | null>(null);
 
@@ -66,12 +76,27 @@
 		prevSection = section;
 	});
 
-	// Compare editing state to what's saved
-	let savedConfigJson = $derived(JSON.stringify(data.experiment.config));
-	let hasUnsavedChanges = $derived(JSON.stringify(configState) !== savedConfigJson);
+	// Compare editing state to what's saved. Postgres JSONB doesn't preserve
+	// key order on read, so a naive JSON.stringify comparison of the in-memory
+	// editor state vs data.experiment.config would flag "dirty" even right
+	// after a successful save. Canonicalize by sorting object keys before
+	// stringifying so the comparison is order-independent.
+	function canonical(value: unknown): string {
+		return JSON.stringify(value, function replacer(_key, v) {
+			if (v && typeof v === 'object' && !Array.isArray(v)) {
+				return Object.keys(v).sort().reduce((acc: Record<string, unknown>, k) => {
+					acc[k] = (v as Record<string, unknown>)[k];
+					return acc;
+				}, {});
+			}
+			return v;
+		});
+	}
+	let savedConfigJson = $derived(canonical(data.experiment.config));
+	let hasUnsavedChanges = $derived(canonical(configState) !== savedConfigJson);
 	let jsonHasUnsavedChanges = $derived.by(() => {
 		try {
-			return JSON.stringify(JSON.parse(configJson)) !== savedConfigJson;
+			return canonical(JSON.parse(configJson)) !== savedConfigJson;
 		} catch {
 			return true;
 		}
@@ -138,7 +163,18 @@
 			formData.set('config', configJson);
 			formData.set('expectedUpdatedAt', expectedUpdatedAt);
 			saving = true;
-			return async ({ update }) => { await update({ reset: false }); saving = false; };
+			return async ({ update }) => {
+				await update({ reset: false });
+				// Re-sync local editor state from the freshly-loaded config so
+				// the dirty indicator clears. Zod fills in defaults server-side
+				// (e.g. `allowRevisit: true`) and Postgres JSONB re-orders keys
+				// on read; without this re-sync, a naive comparison of the
+				// textarea text to `data.experiment.config` would always flag
+				// "dirty" even on a clean save.
+				configJson = JSON.stringify(data.experiment.config, null, 2);
+				configState = structuredClone(data.experiment.config);
+				saving = false;
+			};
 		}}
 	>
 		<textarea
@@ -154,11 +190,13 @@
 				onclick={formatJson}
 				class="text-sm px-3 py-1.5 border border-gray-300 rounded hover:bg-gray-50 transition-colors text-gray-600 cursor-pointer"
 			>Format</button>
-			<button
-				type="submit"
-				disabled={saving}
-				class="text-sm px-4 py-1.5 bg-indigo-600 text-white rounded font-medium hover:bg-indigo-700 transition-colors cursor-pointer disabled:opacity-50"
-			>{saving ? 'Saving...' : 'Save Config'}{#if jsonHasUnsavedChanges && !saving}&nbsp;●{/if}</button>
+			{#if canEdit}
+				<button
+					type="submit"
+					disabled={saving}
+					class="text-sm px-4 py-1.5 bg-indigo-600 text-white rounded font-medium hover:bg-indigo-700 transition-colors cursor-pointer disabled:opacity-50"
+				>{saving ? 'Saving...' : 'Save Config'}{#if jsonHasUnsavedChanges && !saving}&nbsp;●{/if}</button>
+			{/if}
 		</div>
 	</form>
 {:else}
@@ -171,18 +209,24 @@
 			saving = true;
 			return async ({ update }) => {
 				await update({ reset: false });
+				// See JSON-mode save above — re-sync after the server round trip
+				// so the dirty pulse clears.
+				configState = structuredClone(data.experiment.config);
+				configJson = JSON.stringify(data.experiment.config, null, 2);
 				saving = false;
 			};
 		}}
 	>
 		<div class="flex justify-end mb-4">
-			<button
-				type="submit"
-				disabled={saving}
-				class="text-sm px-4 py-1.5 bg-indigo-600 text-white rounded font-medium hover:bg-indigo-700 transition-colors cursor-pointer disabled:opacity-50"
-			>
-				{saving ? 'Saving...' : 'Save Config'}{#if hasUnsavedChanges && !saving}&nbsp;●{/if}
-			</button>
+			{#if canEdit}
+				<button
+					type="submit"
+					disabled={saving}
+					class="text-sm px-4 py-1.5 bg-indigo-600 text-white rounded font-medium hover:bg-indigo-700 transition-colors cursor-pointer disabled:opacity-50"
+				>
+					{saving ? 'Saving...' : 'Save Config'}{#if hasUnsavedChanges && !saving}&nbsp;●{/if}
+				</button>
+			{/if}
 		</div>
 		<ConfigEditor config={configState} experimentId={data.experiment.id} activeSection={configEditorCtx.activeSection} />
 	</form>

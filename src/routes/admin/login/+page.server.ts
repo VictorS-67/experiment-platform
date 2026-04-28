@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 import { PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY } from '$env/static/public';
 import { getServerSupabase } from '$lib/server/supabase';
 import { COOKIE_OPTIONS } from '$lib/server/cookies';
+import { claimInvitesForUser } from '$lib/server/collaborators';
 
 export const actions: Actions = {
 	login: async ({ request, cookies }) => {
@@ -15,7 +16,6 @@ export const actions: Actions = {
 			return fail(400, { error: 'Email and password are required.' });
 		}
 
-		// Authenticate via Supabase Auth
 		const supabase = createClient(PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY);
 		const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
@@ -23,35 +23,39 @@ export const actions: Actions = {
 			return fail(401, { error: 'Invalid email or password.' });
 		}
 
-		// Check admin_users table
+		// Claim any pending invites matching this email. This may create an
+		// `admin_users` row if the user was invited but didn't yet have one,
+		// so it must run BEFORE the admin_users membership check below.
+		await claimInvitesForUser(data.user.id, data.user.email ?? email);
+
 		const serverSupabase = getServerSupabase();
 		const { data: adminRow } = await serverSupabase
 			.from('admin_users')
 			.select('role')
 			.eq('user_id', data.user.id)
-			.single();
+			.maybeSingle();
 
 		if (!adminRow) {
-			// Sign out the session we just created — user is not an admin
 			await supabase.auth.signOut();
-			return fail(403, { error: 'You do not have admin access.' });
+			return fail(403, {
+				error:
+					'You do not have admin access. If you were invited, ask the inviter to confirm the email address matches.'
+			});
 		}
 
-		// Set auth cookies
 		cookies.set('admin_access_token', data.session.access_token, {
 			...COOKIE_OPTIONS,
-			maxAge: 60 * 60 // 1 hour (matches JWT lifetime)
+			maxAge: 60 * 60
 		});
 		cookies.set('admin_refresh_token', data.session.refresh_token ?? '', {
 			...COOKIE_OPTIONS,
-			maxAge: 60 * 60 * 24 * 30 // 30 days
+			maxAge: 60 * 60 * 24 * 14
 		});
 
 		redirect(302, '/admin/experiments');
 	},
 
 	logout: async ({ cookies }) => {
-		// Revoke the Supabase session server-side
 		const accessToken = cookies.get('admin_access_token');
 		if (accessToken) {
 			try {

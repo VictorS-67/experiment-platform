@@ -1,6 +1,7 @@
 import type { RequestHandler } from './$types';
 import { error } from '@sveltejs/kit';
 import { getExperiment, getResponseData } from '$lib/server/admin';
+import { requireExperimentAccess } from '$lib/server/collaborators';
 
 type Row = Record<string, unknown>;
 
@@ -171,7 +172,14 @@ function buildResearchRows(
 }
 
 export const GET: RequestHandler = async ({ params, locals, url }) => {
-	if (!locals.adminUser) error(401, 'Unauthorized');
+	await requireExperimentAccess(locals.adminUser, params.id, 'editor');
+
+	// NOTE: this endpoint is bounded by per-experiment response volume and
+	// goes through a config-driven row transform + (for research style)
+	// cross-row aggregation, so it buffers the full result set in memory
+	// rather than streaming. If an experiment ever trips Vercel's response
+	// cap, migrate raw-CSV mode first — its per-row transform streams
+	// cleanly — and keep research mode buffered (it needs group-by).
 
 	const experiment = await getExperiment(params.id);
 	if (!experiment) error(404, 'Experiment not found');

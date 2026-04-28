@@ -14,6 +14,8 @@
 
 	type Phase = 'intro' | 'welcome' | 'steps' | 'completion';
 
+	// svelte-ignore state_referenced_locally -- initial phase depends on config
+	// at mount; later config changes shouldn't reset the user mid-tutorial.
 	let phase = $state<Phase>(config.introduction ? 'intro' : 'welcome');
 
 	// Driver.js instance and validation state (not reactive — managed imperatively)

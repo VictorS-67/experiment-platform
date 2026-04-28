@@ -92,3 +92,71 @@
 - Stability: seeded shuffle for random ordering, i18n race protection, interval cleanup, phase-filtered response tracking
 - Schema: superRefine validators for review phases, widget type requirements, unique IDs
 - Tests: sanitization, audio detection, HTML escaping + existing schema/utils/replay tests
+
+## Phase 7: Multi-Admin Collaboration + Hardening (2026-04-18 → 2026-04-19)
+
+### Multi-admin collaborators (migration 015)
+- `experiment_collaborators(experiment_id, user_id, role)` with role ∈ {owner, editor, viewer}
+- `pending_invites` for email invites; claimed at next login via `claimInvitesForUser`
+- `requireExperimentAccess(adminUser, expId, minRole)` gate on every admin route
+- Owner-invariant trigger prevents removing/demoting the last owner; cascade-safe via 021
+- Last-owner self-row UI rendered as a read-only badge (no dropdown / Remove button)
+
+### Audit + error logging (migrations 017, 019)
+- `admin_audit_log` (append-only) — `logAdminAction()` from `$lib/server/audit` writes per mutation
+- `error_log` — `reportError()` abstraction (Postgres default, Sentry-swappable) writes 500s
+- FK rule: `admin_audit_log.experiment_id` is `ON DELETE SET NULL`; audit must run BEFORE the cascade delete (inserting after the parent is gone violates the FK at INSERT time)
+
+### Postgres-backed rate limiter (migration 016)
+- `rate_limit_check` RPC + `cleanup_rate_limits` function
+- Replaces in-memory module-scope counter; survives Vercel cold starts
+
+### Optimistic locking surface (migration 014)
+- `upsert_config_with_version` RPC accepts `expected_updated_at`; mismatch raises `P0004`
+- Plumbed through `saveConfigWithVersion` AND `rollbackToVersion` (s3 fix — restore was bypassing the lock)
+- 409 with "modified by another admin" toast; covered by A3.4 and A4.4 E2E
+
+### Round-robin distribution fix
+- `getParticipantIndex` ranks by `registered_at` ASC with id tie-break (s3-followup)
+- Previous impl used `lt('id', ...)` — lexicographic UUID rank, broke latin-square round-robin
+- P6.1 now strictly equals `latinSquareOrder(base, rank)` per registration order
+
+### Misc fixes
+- Owner-invariant trigger short-circuits when the parent experiment is being deleted (021) — prior to this the sole owner could never delete their own experiment
+- Duplicate-slug create surfaces `Slug "X" is already taken` instead of opaque "Failed to create"
+- Viewer Save Config button hidden via `data.myRole` gate (was rendering but always 403'd)
+- Config editor `●` dirty indicator: canonical key-sorted JSON comparison + post-save re-sync (was permanently dirty due to JSONB key reordering + Zod default fill-in)
+- Participant IDOR returns 404 not 500 (`getParticipantDetail` returns null on miss)
+- `BulkImportModal.svelte` wired into `StimuliSection.svelte` — was complete-but-orphaned
+- Stale `session_token` cookie cleared when participant row is gone — was producing redirect loops + theoretical token-reattachment hazard on backup restore (`hooks.server.ts` cookie delete on `getParticipantAndMaybeRotate === null`)
+- Participant language preference no longer reset to `defaultLanguage` on every layout mount — `/e/[slug]/+layout.svelte` now resolves `stored ∩ supported || defaultLanguage` before calling `setLanguage`
+
+### Schema hardening (migration 018)
+- `participants.last_rotated_at` for time-based session rotation (24h)
+
+### Read-side optimisations (migration 020)
+- Aggregate count views with `security_invoker = true` for admin list/detail panels
+
+### Background tables for security & data
+- `rate_limits` (per-IP per-endpoint sliding window) — migration 016
+- `admin_audit_log` — migration 017
+- `error_log` — migration 019
+
+### CSP via SvelteKit nonces
+- `kit.csp` mode `'auto'` in `svelte.config.js`
+- `script-src` nonce-bound; no `unsafe-inline` in `script-src`
+- `style-src-attr 'unsafe-inline'` retained narrowly because Tailwind v4 uses inline styles
+
+### E2E test infrastructure
+- Playwright + per-test-isolated `ctx` fixture (creates a unique admin + tracks teardown)
+- Local-Supabase safety guard in `tests/e2e/fixtures.ts` (refuses non-local URL without `E2E_ALLOW_REMOTE` env opt-in)
+- 83 specs covering admin CRUD, collaborators, config editor + optimistic lock, version restore, access matrix, IDOR, audit + error logs, CSRF, headers, CSP/HSTS preview, rate limit, login edges incl. refresh-token rotation, participant registration, phase traversal, allowMultipleResponses + allowRevisit + conditional widgets, review-phase UUID gotcha, tutorial + Driver.js click-gate, chunking + strict round-robin (N=9), completion + feedback, bulk import (storage + CSV), claim-invite via Inbucket, session rotation (24h GET-only + cookie-clear on missing row), i18n persistence
+- Standalone race scripts under `scripts/race/` (R1 chunk assignment, R2 config save, R3 burst)
+- CI workflow at `.github/workflows/ci.yml` boots local Supabase and runs the suite
+- One known deferred test: **S2.3 per-IP rate-limit counting** — only expressible against the deployed Vercel adapter, since the dev/preview server doesn't trust `X-Forwarded-For`. Per-IP correctness is provable by inspection of the limiter call site (`checkRateLimit(event.getClientAddress(), ...)`).
+
+### A11y
+- `Field.svelte` wrapper provides implicit label-input association for the entire admin config editor (cleared the 78 a11y warnings, including 33 from `PhasesSection.svelte`)
+
+### Coding philosophy
+- Added "Root-cause fixes, not band-aids" to `CLAUDE.md` as the project's stated coding principle

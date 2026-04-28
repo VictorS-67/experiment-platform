@@ -1,5 +1,6 @@
 <script lang="ts">
 	import LocalizedInput from '../LocalizedInput.svelte';
+	import Field from './Field.svelte';
 	import { updatePath, feedbackWidgetTypes } from './helpers';
 	import type { ExperimentConfig } from '$lib/config/schema';
 
@@ -46,8 +47,7 @@
 	{#if config.completion}
 		<LocalizedInput label="Title" value={config.completion.title} {languages} onchange={(v) => update(['completion', 'title'], v)} />
 		<LocalizedInput label="Body" value={config.completion.body} {languages} multiline onchange={(v) => update(['completion', 'body'], v)} />
-		<div>
-			<label class="block text-xs text-gray-500 mb-1">Redirect URL (optional)</label>
+		<Field label="Redirect URL (optional)">
 			<input
 				type="text"
 				value={config.completion.redirectUrl ?? ''}
@@ -55,7 +55,7 @@
 				class="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
 				placeholder="https://example.com/thank-you"
 			/>
-		</div>
+		</Field>
 		<label class="flex items-center gap-2 text-sm">
 			<input
 				type="checkbox"
@@ -80,14 +80,12 @@
 						<button type="button" onclick={() => removeFeedbackWidget(wi)} class="text-xs text-red-500 hover:text-red-700 cursor-pointer">Remove</button>
 					</div>
 					<div class="grid grid-cols-3 gap-2">
-						<div>
-							<label class="block text-xs text-gray-500 mb-0.5">ID</label>
+						<Field label="ID">
 							<input type="text" value={widget.id}
 								oninput={(e) => update(fbPath(wi, 'id'), e.currentTarget.value)}
 								class="w-full px-2 py-1 border border-gray-300 rounded text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-						</div>
-						<div>
-							<label class="block text-xs text-gray-500 mb-0.5">Type</label>
+						</Field>
+						<Field label="Type">
 							<select value={widget.type}
 								onchange={(e) => update(fbPath(wi, 'type'), e.currentTarget.value)}
 								class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500">
@@ -95,7 +93,7 @@
 									<option value={t}>{t}</option>
 								{/each}
 							</select>
-						</div>
+						</Field>
 						<label class="flex items-end gap-2 text-xs">
 							<input type="checkbox" checked={widget.required}
 								onchange={(e) => update(fbPath(wi, 'required'), e.currentTarget.checked)} />
@@ -119,6 +117,7 @@
 								<div class="flex items-start gap-2 mb-1">
 									<input type="text" value={option.value}
 										oninput={(e) => update([...optPath, 'value'], e.currentTarget.value)}
+										aria-label="Option value"
 										class="w-24 shrink-0 px-2 py-1 border border-gray-300 rounded text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="value" />
 									<div class="flex-1">
 										<LocalizedInput label="" value={option.label} {languages} onchange={(v) => update([...optPath, 'label'], v)} />
@@ -134,25 +133,22 @@
 						<div class="border-t border-gray-100 pt-2 mt-2">
 							<span class="text-xs text-gray-500 block mb-1">Range config</span>
 							<div class="grid grid-cols-3 gap-2">
-								<div>
-									<label class="block text-xs text-gray-400 mb-0.5">Min</label>
+								<Field label="Min">
 									<input type="number" value={widget.config?.min ?? (widget.type === 'likert' ? 1 : 0)}
 										oninput={(e) => update([...fbPath(wi, 'config'), 'min'], e.currentTarget.valueAsNumber)}
 										class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-								</div>
-								<div>
-									<label class="block text-xs text-gray-400 mb-0.5">Max</label>
+								</Field>
+								<Field label="Max">
 									<input type="number" value={widget.config?.max ?? (widget.type === 'likert' ? 7 : 100)}
 										oninput={(e) => update([...fbPath(wi, 'config'), 'max'], e.currentTarget.valueAsNumber)}
 										class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-								</div>
+								</Field>
 								{#if widget.type === 'slider'}
-									<div>
-										<label class="block text-xs text-gray-400 mb-0.5">Step</label>
+									<Field label="Step">
 										<input type="number" value={widget.config?.step ?? 1}
 											oninput={(e) => update([...fbPath(wi, 'config'), 'step'], e.currentTarget.valueAsNumber)}
 											class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-									</div>
+									</Field>
 								{/if}
 							</div>
 							<div class="grid grid-cols-2 gap-2 mt-2">
@@ -172,18 +168,16 @@
 								Show character count
 							</label>
 							<div class="grid grid-cols-2 gap-2">
-								<div>
-									<label class="block text-xs text-gray-400 mb-0.5">Min length</label>
+								<Field label="Min length">
 									<input type="number" value={widget.config?.minLength ?? ''}
 										oninput={(e) => update([...fbPath(wi, 'config'), 'minLength'], e.currentTarget.value ? e.currentTarget.valueAsNumber : undefined)}
 										class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-								</div>
-								<div>
-									<label class="block text-xs text-gray-400 mb-0.5">Max length</label>
+								</Field>
+								<Field label="Max length">
 									<input type="number" value={widget.config?.maxLength ?? ''}
 										oninput={(e) => update([...fbPath(wi, 'config'), 'maxLength'], e.currentTarget.value ? e.currentTarget.valueAsNumber : undefined)}
 										class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-								</div>
+								</Field>
 							</div>
 						</div>
 					{/if}

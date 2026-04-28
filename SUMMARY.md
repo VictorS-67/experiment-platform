@@ -2,8 +2,8 @@
 
 > **Purpose**: This document is written for AI agents. It contains everything needed to understand, navigate, and continue development on this project without prior context.
 >
-> **Last updated**: 2026-03-24
-> **Build status**: 0 type errors, production build succeeds (`npx svelte-check` passes, `npm run build` succeeds). 46 unit tests passing (`npm run test`).
+> **Last updated**: 2026-04-27
+> **Build status**: 0 type errors, production build succeeds. 129 Vitest unit tests passing; 83 Playwright E2E tests passing (against local Supabase).
 > **Deployed**: Vercel (using `@sveltejs/adapter-vercel`)
 
 ---
@@ -18,7 +18,7 @@ A **config-driven experiment/survey platform** for academic research data collec
 
 **Two user roles**:
 - **Participants**: Register via email, complete multi-phase experiments (stimulus-response + review phases), record audio, annotate timestamps
-- **Admins**: CRUD experiments, edit configs via Form or JSON editor, view participant data, export CSV
+- **Admins**: CRUD experiments, edit configs via Form or JSON editor, view participant data, export CSV. Authorization is **per-experiment** via `experiment_collaborators` rows (owner / editor / viewer); admins are NOT granted access to all experiments by default.
 
 ---
 
@@ -112,42 +112,40 @@ SUPABASE_SERVICE_ROLE_KEY=<service role key>
 
 ## 5. Database Schema
 
-### Tables (defined in `supabase/migrations/001_initial_schema.sql`)
+See [docs/DATABASE.md](docs/DATABASE.md) for full schema, all 21 migrations, RPCs, triggers, and FK cascade rules. Highlights:
 
 ```sql
-experiments     (id UUID PK, slug TEXT UNIQUE, status TEXT CHECK(draft|active|paused|archived), config JSONB, created_by UUID, created_at, updated_at)
-participants    (id UUID PK, experiment_id UUID FK, email TEXT, registration_data JSONB, session_token UUID UNIQUE NOT NULL, chunk_assignments JSONB DEFAULT '{}', registered_at)
-                UNIQUE(experiment_id, email)
-responses       (id UUID PK, experiment_id UUID FK, participant_id UUID FK, phase_id TEXT, stimulus_id TEXT, response_data JSONB, response_index INT DEFAULT 0, created_at, updated_at)
-file_uploads    (id UUID PK, response_id UUID FK, experiment_id UUID FK, participant_id UUID FK, widget_id TEXT, storage_path TEXT, file_type TEXT, file_size INT, created_at)
-admin_users     (user_id UUID PK FK auth.users, role TEXT CHECK(admin|researcher), created_at)
+experiments                (id, slug UNIQUE, status, config JSONB, created_by, created_at, updated_at)
+participants               (id, experiment_id FK, email, registration_data, session_token UNIQUE NOT NULL,
+                            chunk_assignments JSONB, last_active_at, last_rotated_at, registered_at)
+responses                  (id, experiment_id FK, participant_id FK, phase_id, stimulus_id, response_data, response_index)
+file_uploads               (id, response_id FK, experiment_id FK, participant_id FK, widget_id, storage_path, file_type, file_size)
+admin_users                (user_id PK FK auth.users, role)
+experiment_config_versions (id, experiment_id FK, version_number, config, created_at)
+experiment_collaborators   (id, experiment_id FK, user_id FK auth.users, role CHECK(owner|editor|viewer))   -- per-experiment authz
+pending_invites            (id, experiment_id FK, email, role, claim_token UNIQUE, claimed_at, claimed_by)   -- email invite flow
+rate_limits                (key, endpoint, window_start, count) PK(key, endpoint, window_start)             -- Postgres-backed limiter
+admin_audit_log            (id, admin_user_id, admin_email, experiment_id FK ON DELETE SET NULL, action,    -- append-only
+                            resource_type, resource_id, ip, metadata, created_at)
+error_log                  (id, level, message, stack, context, created_at)
 ```
 
-### Views
+**Triggers**:
+- `enforce_owner_invariant` on `experiment_collaborators` — blocks removing/demoting the last owner; short-circuits during cascade-delete (migration 021).
+- `auto_add_creator_as_owner` on `experiments` — auto-inserts an `experiment_collaborators(role='owner')` row for `created_by`.
 
-```sql
-response_flat   -- Joins responses + experiments + participants for CSV export
-                -- Columns: id, experiment_slug, participant_email, participant_name, phase_id, stimulus_id, response_data, response_index, created_at, updated_at
-```
+**RPCs**:
+- `set_chunk_assignment(p_id, chunk_key, assignment)` — atomic JSONB update.
+- `insert_config_version(exp_id, cfg)` — atomic version-row insert.
+- `upsert_config_with_version(exp_id, cfg, expected_updated_at)` — atomic save + version + optimistic lock (raises `P0004` on conflict).
+- `rate_limit_check(key, endpoint, max, window_seconds)` — sliding-window counter.
 
-### RLS Policy Evolution (8 migrations)
+### Security Model Summary
 
-| Migration | What Changed |
-|-----------|-------------|
-| `001_initial_schema.sql` | Creates all tables, indexes (including GIN on JSONB columns), and `response_flat` view |
-| `002_rls_policies.sql` | Initial permissive RLS: public INSERT/SELECT/UPDATE on all tables |
-| `003_tighten_rls.sql` | Drops permissive policies. INSERT requires valid active `experiment_id` (participants) and valid `participant_id` matching experiment (responses). Removes UPDATE on responses (append-only). SELECT remains `USING(true)` with note about auth.uid() limitation |
-| `004_session_security.sql` | Adds `session_token UUID DEFAULT gen_random_uuid()` NOT NULL UNIQUE to `participants`. Backfills existing rows |
-| `005_remove_anon_select.sql` | Drops anon SELECT on `participants`, `responses`, `file_uploads`. Only `experiments` remains anon-readable. All sensitive data reads are now server-side via service role key |
-| `006_fix_view_security.sql` | Recreates `response_flat` view with `security_invoker = true` (was implicitly SECURITY DEFINER, flagged by Supabase) |
-| `007_experiment_versions.sql` | Adds `experiment_config_versions` table for config history tracking (id, experiment_id FK, version_number INT, config JSONB, created_at) |
-| `008_chunk_assignments.sql` | Adds `chunk_assignments JSONB DEFAULT '{}'` column to `participants` for latin square block order persistence |
-
-### Current Security Model Summary
-
-- **Anon key can**: SELECT from `experiments` (active configs only), INSERT into `participants`/`responses`/`file_uploads` (with reference checks)
-- **Anon key cannot**: SELECT from `participants`/`responses`/`file_uploads`, UPDATE anything, DELETE anything
-- **Service role key**: Full unrestricted access (used server-side only)
+- **Anon key can**: SELECT from `experiments` (active configs only), INSERT into `participants`/`responses`/`file_uploads` (with reference checks).
+- **Anon key cannot**: SELECT from sensitive tables, UPDATE anything, DELETE anything.
+- **Service role key**: Full unrestricted access (server-side only).
+- **Per-experiment authorization** is enforced at the application layer via `requireExperimentAccess()` from `$lib/server/collaborators` — RLS does NOT enforce collaborator roles because admin code paths run as service role. Non-collaborators get **404** (hide existence), not 403.
 
 ---
 
@@ -567,23 +565,27 @@ Exports `COOKIE_OPTIONS` (`path: '/'`, `httpOnly: true`, `sameSite: 'lax'`, `sec
 
 ## 12. Security
 
-### Security Headers (set in `hooks.server.ts` on every response)
+### Security Headers (set in `hooks.server.ts` on every response; CSP via `kit.csp` in `svelte.config.js`)
 
 ```
 X-Frame-Options: DENY
 X-Content-Type-Options: nosniff
 Referrer-Policy: strict-origin-when-cross-origin
 Permissions-Policy: camera=(), microphone=(self), geolocation=()
+Strict-Transport-Security: max-age=31536000; includeSubDomains    # production only
 Content-Security-Policy:
   default-src 'self';
-  script-src 'self' 'unsafe-inline';
-  style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+  script-src 'self' 'nonce-<random>';                  # nonce-bound, NO unsafe-inline
+  style-src 'self' https://fonts.googleapis.com;       # NO unsafe-inline
+  style-src-attr 'unsafe-inline';                       # narrow exception for Tailwind v4 inline styles
   font-src 'self' https://fonts.gstatic.com;
   img-src 'self' data: blob: {SUPABASE_URL};
   media-src 'self' blob: {SUPABASE_URL};
   connect-src 'self' {SUPABASE_URL};
   frame-ancestors 'none'
 ```
+
+SvelteKit's `kit.csp` mode `'auto'` injects per-response nonces into framework `<script>` tags. Inline event handlers (`onclick=""`) and inline `<style>` blocks are blocked.
 
 ### File Upload Validation (`src/lib/server/data.ts`)
 
@@ -597,14 +599,13 @@ Content-Security-Policy:
 - Each save creates a new row with incrementing `response_index`
 - CSV export sanitizes values against injection (leading `=`, `+`, `-`, `@`, `\t`, `\r`)
 
-### Rate Limiting (in `hooks.server.ts`)
+### Rate Limiting (Postgres-backed)
 
-In-memory sliding window per client IP:
+`checkRateLimit(ip, endpoint, max, windowSeconds)` from `$lib/server/rate-limit` calls the `rate_limit_check` RPC (migration 016). Sliding-window per-(IP, endpoint).
 - `/auth`: 20 requests/min
 - `/save`: 60 requests/min
 - `/upload`: 30 requests/min
-- Stale entries cleaned every 5 minutes. Returns 429 when exceeded.
-- ⚠️ **Serverless caveat**: Module-scope state resets on cold starts (Vercel). This rate limiter is effective only on long-running Node processes. A Redis/Upstash-backed solution is needed for stateless deployments.
+- State lives in Postgres — survives serverless cold starts. Stale rows cleaned via `cleanup_rate_limits()` (schedule via `pg_cron` or periodic admin endpoint). Returns 429 when exceeded.
 
 ### CSRF Protection
 
@@ -622,6 +623,15 @@ In-memory sliding window per client IP:
 ### Error Messages
 
 All `throw` calls in `src/lib/server/admin.ts` and `src/lib/server/data.ts` use generic messages (e.g., `"Failed to load participants"`) — raw Supabase/Postgres error details are logged server-side via `console.error()` and never surfaced to the browser.
+
+### Audit + Error Logs
+
+- **`admin_audit_log`** (migration 017, append-only): mutating admin actions write a row via `logAdminAction()` from `$lib/server/audit`. The `experiment_id` FK is `ON DELETE SET NULL` — audit rows survive experiment deletion. **In delete actions, call audit BEFORE the cascade delete** (inserting a row pointing at an already-deleted parent violates the FK at INSERT time).
+- **`error_log`** (migration 019): `reportError()` from `$lib/server/errors` writes to Postgres by default; the abstraction is Sentry-swappable. Wired into SvelteKit's `handleError` hook for unhandled 500s.
+
+### Optimistic Locking
+
+Config saves and rollbacks pass `expected_updated_at` to the `upsert_config_with_version` RPC (migration 014). Mismatch raises `P0004`, surfaced as a 409 with the "modified by another admin" toast. Both `saveConfigWithVersion` AND `rollbackToVersion` plumb this through.
 
 ### Admin User Lookup
 
@@ -818,19 +828,60 @@ In Svelte 5, `{@const}` must be an **immediate child** of `{#each}`, `{#if}`, `{
 - **15 seededShuffle + latinSquareOrder tests** in `utils/index.test.ts`
 - **12 replay controller tests** in `utils/replay.test.ts`
 
+### Phase 7: Multi-Admin Collaboration + Hardening (2026-04-18 → 2026-04-19)
+
+**Multi-admin collaborator model** (migration 015):
+- `experiment_collaborators(experiment_id, user_id, role)` with role ∈ {owner, editor, viewer}; auto-add-creator + owner-invariant triggers
+- `pending_invites` for email invites; `claimInvitesForUser()` runs at next admin login
+- Every admin route guards via `requireExperimentAccess(adminUser, expId, minRole)` from `$lib/server/collaborators`
+- Non-collaborators get **404** (hide existence), not 403
+- Owner-invariant trigger short-circuits during cascade-delete (migration 021) — without this fix, sole owners could not delete their own experiments
+
+**Atomic + concurrency-safe RPCs**:
+- `upsert_config_with_version` (migration 014) with `expected_updated_at` optimistic lock; raises `P0004` on conflict; plumbed through both `saveConfigWithVersion` AND `rollbackToVersion`
+- `set_chunk_assignment` (migration 009, predates this phase but exercised by R1 race tests)
+
+**Postgres-backed rate limiter** (migration 016): replaces in-memory limiter; survives serverless cold starts.
+
+**Audit + error logging** (migrations 017, 019): `admin_audit_log` (append-only) + `error_log` (Sentry-swappable abstraction in `$lib/server/errors`).
+
+**Round-robin distribution fix**: `getParticipantIndex` ranks by `registered_at` ASC (with id tie-break for same-`now()` bulk inserts), not lexicographic UUID. Fixes latin-square round-robin distribution at the participant cohort level.
+
+**Schema hardening** (migration 018): `participants.last_rotated_at` for time-based session rotation (24h).
+
+**Read-side optimisations** (migration 020): aggregate count views with `security_invoker = true` for admin list/detail panels.
+
+**CSP via SvelteKit nonces**: `kit.csp` mode `'auto'`. `script-src` now nonce-bound; `unsafe-inline` removed from both `script-src` and `style-src`. Narrow `style-src-attr 'unsafe-inline'` retained for Tailwind v4 inline styles.
+
+**A11y**: `Field.svelte` wrapper provides implicit label-input association across the entire admin config editor (cleared 78 a11y warnings).
+
+**E2E test infrastructure**:
+- Playwright + per-test-isolated `ctx` fixture creating a unique admin per test
+- Local-Supabase safety guard refuses non-local `PUBLIC_SUPABASE_URL` without explicit env opt-in
+- 74 specs covering admin CRUD, collaborators, config editor + optimistic lock, version restore, access matrix, IDOR, audit + error logs, CSRF, headers, CSP/HSTS preview, rate limit, registration, phase traversal, review-phase UUID gotcha, tutorial, chunking + latin-square (incl. strict round-robin verification at N=9), completion + feedback, bulk import (storage + CSV), claim-invite via Inbucket
+- Standalone race scripts under `scripts/race/` (R1/R2/R3)
+- CI workflow at `.github/workflows/ci.yml` boots local Supabase and runs the suite
+
+**Bulk stimulus import wired**: `BulkImportModal.svelte` (which had been complete-but-orphaned) is now reachable from `StimuliSection.svelte` via a header-level "Bulk import" button. Storage tab gates on prereqs (source=`supabase-storage` + `storagePath`); merge strategy defaults to `replace` when items list is empty, `append` otherwise.
+
+**Other root-cause fixes** (per CLAUDE.md philosophy):
+- Duplicate-slug create surfaces `Slug "X" is already taken` instead of opaque "Failed to create"
+- Viewer Save Config button hidden via `data.myRole` gate (was rendering but always 403'd)
+- Config editor `●` dirty indicator: canonical key-sorted JSON comparison + post-save re-sync (was permanently dirty due to JSONB key reordering + Zod default fill-in)
+- Participant IDOR returns 404, not 500 (`getParticipantDetail` returns null on miss)
+- Stale `session_token` cookie cleared when the participant row is gone (was producing redirect loops; theoretical token-reattachment hazard on backup restore)
+- Participant language preference no longer reset to `defaultLanguage` on every layout mount (silent UX bug — selection vanished within one nav)
+
 ---
 
 ## 15. What Is Left To Do
 
 ### Known Gaps
-- **Serverless rate limiting**: In-memory rate limiter resets on cold starts; needs Redis/Upstash for Vercel
-- **No E2E tests**: Unit tests exist (46); Playwright E2E tests not yet set up (Phase 7.1)
-- **No i18n store tests**: `platform()` lookup + interpolation, `localized()` fallback — still TODO (Phase 7.1)
-- **No response store tests**: `completedStimuli` and `byStimulus` computed maps — still TODO (Phase 7.1)
-- **a11y warnings**: Some labels not associated with controls in ConfigEditor (non-blocking, Phase 7.3)
 - **No pagination**: Experiment list and participants list load everything at once (Phase 10.2)
 - **Database backups**: Supabase automated backups not yet configured (pre-launch checklist)
 - **Pilot testing**: 5-10 participants through full flow not yet done (Phase 5.5)
+- **`rate_limits` cleanup not scheduled**: `cleanup_rate_limits()` exists but isn't wired to `pg_cron` or a periodic admin endpoint yet
+- **Tier-4 E2E gaps** (low-stakes edges, not blockers): A1.5 refresh-token rotation, P3.3/P3.4/P3.6 widget edge cases, P7.2 Driver.js click-gate, P9 i18n switching, P2 session-rotation timing, S2.3 per-IP rate-limit assertion (requires deployed adapter to honour `X-Forwarded-For`)
 
 ### Potential Future Features (see `FUTURE_PLANS.md` for full roadmap)
 - More widget types: image annotation, ranking/sorting, matrix/grid, comparison (Phase 8.1)
@@ -933,6 +984,18 @@ node scripts/upload-all-videos.js
 | Admin experiment edit page | `src/routes/admin/experiments/[id]/+page.svelte` |
 | Admin experiment server actions | `src/routes/admin/experiments/[id]/+page.server.ts` |
 | CSV export endpoint | `src/routes/admin/experiments/[id]/data/export/+server.ts` |
-| Database migrations | `supabase/migrations/001-005_*.sql` |
+| Database migrations | `supabase/migrations/001-021_*.sql` |
+| Collaborator access control | `src/lib/server/collaborators.ts` |
+| Audit log helper | `src/lib/server/audit.ts` |
+| Error reporting abstraction | `src/lib/server/errors.ts` |
+| Postgres-backed rate limiter | `src/lib/server/rate-limit.ts` |
+| Pagination async generator | `src/lib/server/pagination.ts` |
+| Bulk import modal | `src/lib/components/admin/config/BulkImportModal.svelte` |
+| Collaborators panel | `src/lib/components/admin/CollaboratorsPanel.svelte` |
+| Field wrapper (a11y) | `src/lib/components/admin/config/Field.svelte` |
+| E2E fixtures + helpers | `tests/e2e/fixtures.ts`, `tests/e2e/seed.ts` |
+| Race-condition driver scripts | `scripts/race/r1-r3-*.ts` |
+| CI workflow | `.github/workflows/ci.yml` |
 | Experiment configs (local) | `configs/` (gitignored) |
 | DB seeding script | `scripts/seed.js` |
+| Config migrator | `scripts/migrate-configs.ts` |

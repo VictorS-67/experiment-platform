@@ -34,16 +34,21 @@ export const POST: RequestHandler = async ({ request, locals, params }) => {
 
 	// Validate phaseId, stimulusId, and response keys against config
 	const config = exp.config as {
-		phases?: Array<{ id: string; responseWidgets?: Array<{ id: string }>; reviewConfig?: { responseWidgets?: Array<{ id: string }> } }>;
+		phases?: Array<{ id: string; type?: string; responseWidgets?: Array<{ id: string }>; reviewConfig?: { responseWidgets?: Array<{ id: string }> } }>;
 		stimuli?: { items?: Array<{ id: string }> };
 	};
 	const phase = config?.phases?.find((p) => p.id === phaseId);
 	if (!phase) {
 		error(400, 'Invalid phase');
 	}
-	const stimulusExists = config?.stimuli?.items?.some((s) => s.id === stimulusId);
-	if (!stimulusExists) {
-		error(400, 'Invalid stimulus');
+	// Review phases use the source-phase response UUID as stimulusId (see
+	// CLAUDE.md "Review phases use response UUIDs"), so we skip the
+	// stimulus-items existence check for them.
+	if (phase.type !== 'review') {
+		const stimulusExists = config?.stimuli?.items?.some((s) => s.id === stimulusId);
+		if (!stimulusExists) {
+			error(400, 'Invalid stimulus');
+		}
 	}
 	const phaseWidgets = phase.responseWidgets ?? phase.reviewConfig?.responseWidgets ?? [];
 	const widgetIds = new Set(phaseWidgets.map((w) => w.id));

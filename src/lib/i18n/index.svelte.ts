@@ -19,12 +19,32 @@ async function loadPlatformTranslations(lang: string): Promise<Record<string, un
 	}
 }
 
+const STORAGE_KEY = 'experiment-platform.language';
+
+function readPersistedLanguage(): string {
+	if (typeof localStorage === 'undefined') return 'en';
+	try {
+		return localStorage.getItem(STORAGE_KEY) ?? 'en';
+	} catch {
+		return 'en';
+	}
+}
+
 class I18nStore {
-	language = $state('en');
+	language = $state(readPersistedLanguage());
 	translations = $state<Record<string, unknown>>(enTranslations);
 
 	async setLanguage(lang: string): Promise<void> {
 		this.language = lang;
+		// Persist so the participant's choice survives reloads.
+		if (typeof localStorage !== 'undefined') {
+			try { localStorage.setItem(STORAGE_KEY, lang); } catch { /* ignore quota / privacy errors */ }
+		}
+		// Update <html lang> so screen readers and search engines see the
+		// right value.
+		if (typeof document !== 'undefined') {
+			document.documentElement.setAttribute('lang', lang);
+		}
 		// Use cached value synchronously if available (avoids flash of untranslated keys)
 		if (translationCache.has(lang)) {
 			this.translations = translationCache.get(lang)!;

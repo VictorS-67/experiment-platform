@@ -1,0 +1,131 @@
+{
+  "slug": "e2e-full",
+  "version": 1,
+  "status": "active",
+  "metadata": {
+    "title": { "en": "Full Feature E2E", "ja": "フルフィーチャー E2E" },
+    "description": { "en": "Covers registration + two phases + review + skip rule + widgets.", "ja": "全機能カバー" },
+    "languages": ["en", "ja"],
+    "defaultLanguage": "en"
+  },
+  "registration": {
+    "introduction": {
+      "title": { "en": "Welcome", "ja": "ようこそ" },
+      "body": { "en": "Please fill in your details.", "ja": "情報を入力してください。" }
+    },
+    "fields": [
+      {
+        "id": "age",
+        "type": "number",
+        "label": { "en": "Age", "ja": "年齢" },
+        "required": true,
+        "validation": { "min": 18, "max": 120 }
+      },
+      {
+        "id": "country",
+        "type": "select",
+        "label": { "en": "Country", "ja": "国" },
+        "required": true,
+        "options": [
+          { "value": "us", "label": { "en": "United States", "ja": "アメリカ" } },
+          { "value": "jp", "label": { "en": "Japan", "ja": "日本" } }
+        ]
+      },
+      {
+        "id": "native_language",
+        "type": "text",
+        "label": { "en": "Native language", "ja": "母語" },
+        "required": false,
+        "conditionalOn": { "field": "country", "value": "jp" }
+      }
+    ]
+  },
+  "tutorial": null,
+  "phases": [
+    {
+      "id": "p1",
+      "slug": "main",
+      "type": "stimulus-response",
+      "title": { "en": "Main phase", "ja": "メインフェーズ" },
+      "introduction": {
+        "title": { "en": "Main phase", "ja": "メインフェーズ" },
+        "body": { "en": "Rate each item.", "ja": "各項目を評価してください。" }
+      },
+      "gatekeeperQuestion": {
+        "text": { "en": "Have you seen this before?", "ja": "これを見たことがありますか?" },
+        "yesLabel": { "en": "Yes", "ja": "はい" },
+        "noLabel": { "en": "No", "ja": "いいえ" },
+        "noResponseValue": "never_seen",
+        "skipToNext": true
+      },
+      "responseWidgets": [
+        {
+          "id": "rating",
+          "type": "likert",
+          "label": { "en": "How much do you like it?", "ja": "どのくらい好きですか?" },
+          "required": true,
+          "config": { "min": 1, "max": 5 }
+        },
+        {
+          "id": "comment",
+          "type": "textarea",
+          "label": { "en": "Any comments?", "ja": "コメント" },
+          "required": false,
+          "config": { "maxLength": 500, "showCharCount": true }
+        }
+      ],
+      "stimulusOrder": "sequential",
+      "allowRevisit": true,
+      "allowMultipleResponses": false,
+      "skipRules": [
+        {
+          "targetStimulusId": "s3",
+          "condition": { "stimulusId": "s1", "widgetId": "rating", "operator": "equals", "value": "1" }
+        }
+      ],
+      "completion": {
+        "title": { "en": "Phase complete", "ja": "フェーズ完了" },
+        "body": { "en": "Moving to review phase.", "ja": "レビューフェーズへ移動します。" }
+      }
+    },
+    {
+      "id": "p2",
+      "slug": "review",
+      "type": "review",
+      "title": { "en": "Review", "ja": "レビュー" },
+      "reviewConfig": {
+        "sourcePhase": "p1",
+        "filterEmpty": true,
+        "replayMode": "segment",
+        "responseWidgets": [
+          {
+            "id": "confidence",
+            "type": "likert",
+            "label": { "en": "How confident are you?", "ja": "どのくらい自信がありますか?" },
+            "required": true,
+            "config": { "min": 1, "max": 5 }
+          }
+        ]
+      },
+      "completion": {
+        "title": { "en": "All done", "ja": "完了" },
+        "body": { "en": "Thank you.", "ja": "ありがとう。" }
+      }
+    }
+  ],
+  "stimuli": {
+    "type": "text",
+    "source": "external-urls",
+    "messageTemplate": "Consider: {label}",
+    "items": [
+      { "id": "s1", "type": "text", "label": { "en": "Apples", "ja": "りんご" } },
+      { "id": "s2", "type": "text", "label": { "en": "Bananas", "ja": "バナナ" } },
+      { "id": "s3", "type": "text", "label": { "en": "Cherries", "ja": "さくらんぼ" } }
+    ]
+  },
+  "completion": {
+    "title": { "en": "Thanks!", "ja": "ありがとうございました!" },
+    "body": { "en": "Your session is complete.", "ja": "セッション完了です。" },
+    "feedbackWidgets": []
+  }
+}

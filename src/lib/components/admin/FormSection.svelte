@@ -11,6 +11,10 @@
 		children: Snippet;
 	} = $props();
 
+	// Capture `open` as the initial expanded value only — subsequent changes
+	// to the `open` prop (not expected in practice) should not override the
+	// user's manual toggle state.
+	// svelte-ignore state_referenced_locally
 	let expanded = $state(open);
 </script>
 

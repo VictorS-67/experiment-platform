@@ -155,15 +155,15 @@
 			</button>
 			{#if showExportOptions}
 				<div class="absolute right-0 top-full mt-2 w-72 bg-white border border-gray-200 rounded-lg shadow-lg p-4 z-10 space-y-3">
-					<div>
-						<label class="block text-xs font-medium text-gray-600 mb-1">Phase</label>
+					<label class="block">
+						<span class="block text-xs font-medium text-gray-600 mb-1">Phase</span>
 						<select bind:value={selectedPhase} class="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
 							<option value="">All phases</option>
 							{#each configPhases() as phase}
 								<option value={phase.id}>{getPhaseName(phase.id)}</option>
 							{/each}
 						</select>
-					</div>
+					</label>
 					<div class="flex gap-4">
 						<label class="flex items-center gap-1.5 text-sm cursor-pointer">
 							<input type="radio" bind:group={exportFormat} value="csv" /> CSV
@@ -172,8 +172,8 @@
 							<input type="radio" bind:group={exportFormat} value="json" /> JSON
 						</label>
 					</div>
-					<div>
-						<label class="block text-xs font-medium text-gray-600 mb-1">Style</label>
+					<fieldset>
+						<legend class="block text-xs font-medium text-gray-600 mb-1">Style</legend>
 						<div class="flex gap-4">
 							<label class="flex items-center gap-1.5 text-sm cursor-pointer">
 								<input type="radio" bind:group={exportStyle} value="raw" /> Raw
@@ -182,7 +182,7 @@
 								<input type="radio" bind:group={exportStyle} value="research" /> Research-friendly
 							</label>
 						</div>
-					</div>
+					</fieldset>
 					<div class="flex gap-4">
 						<label class="flex items-center gap-1.5 text-sm cursor-pointer">
 							<input type="radio" bind:group={dateFormat} value="iso" /> ISO dates

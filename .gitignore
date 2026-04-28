@@ -37,3 +37,7 @@ backup-*.json
 *.csv
 configs/
 supabase/.temp/
+
+# Playwright
+test-results/
+playwright-report/

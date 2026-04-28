@@ -22,6 +22,19 @@ if (!supabaseUrl || !serviceRoleKey) {
 	process.exit(1);
 }
 
+// Safety check: seeding into a non-localhost URL could overwrite real
+// experiments. Require an explicit --allow-remote flag for remote targets so
+// `node scripts/seed.js` can't silently hit production by mistake.
+const isLocal = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(supabaseUrl);
+const allowRemote = process.argv.includes('--allow-remote');
+if (!isLocal && !allowRemote) {
+	console.error(
+		`Refusing to seed: PUBLIC_SUPABASE_URL is not localhost (${supabaseUrl}).\n` +
+			'Re-run with --allow-remote if you really intend to seed this environment.'
+	);
+	process.exit(1);
+}
+
 const supabase = createClient(supabaseUrl, serviceRoleKey);
 
 async function seedConfig(configPath) {
