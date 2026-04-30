@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ExperimentConfigSchema } from './schema';
+import fullFeatureFixture from '../../../tests/e2e/fixtures/full-feature-config.json' with { type: 'json' };
 
 // Minimal valid config for testing
 function makeMinimalConfig(overrides: Record<string, unknown> = {}) {
@@ -636,5 +637,201 @@ describe('ExperimentConfigSchema', () => {
 			expect(w.stepLabel).toEqual({ en: 'Step 1' });
 			expect(w.placeholder).toEqual({ en: 'Type here' });
 		}
+	});
+
+	// Gatekeeper: nested {initial, subsequent?} shape (no flat fields)
+	describe('GatekeeperQuestion', () => {
+		const phaseWithGate = (gatekeeperQuestion: unknown) => ({
+			...makeMinimalConfig(),
+			phases: [
+				{
+					id: 'p1',
+					slug: 'survey',
+					type: 'stimulus-response',
+					title: { en: 'Survey' },
+					gatekeeperQuestion,
+					responseWidgets: [
+						{
+							id: 'w1',
+							type: 'text',
+							label: { en: 'Answer' }
+						}
+					],
+					completion: { title: { en: 'Done' }, body: { en: 'Done' } }
+				}
+			]
+		});
+
+		it('accepts initial-only nested shape', () => {
+			const result = ExperimentConfigSchema.safeParse(
+				phaseWithGate({
+					initial: {
+						text: { en: 'Engage?' },
+						yesLabel: { en: 'Yes' },
+						noLabel: { en: 'No' }
+					}
+				})
+			);
+			expect(result.success).toBe(true);
+		});
+
+		it('accepts initial + subsequent', () => {
+			const result = ExperimentConfigSchema.safeParse(
+				phaseWithGate({
+					initial: {
+						text: { en: 'Engage?' },
+						yesLabel: { en: 'Yes' },
+						noLabel: { en: 'No' }
+					},
+					subsequent: {
+						text: { en: 'More?' },
+						yesLabel: { en: 'Yes, more' },
+						noLabel: { en: 'No, done' }
+					}
+				})
+			);
+			expect(result.success).toBe(true);
+		});
+
+		it('rejects flat (legacy) shape — must run config migrator', () => {
+			const result = ExperimentConfigSchema.safeParse(
+				phaseWithGate({
+					text: { en: 'Engage?' },
+					yesLabel: { en: 'Yes' },
+					noLabel: { en: 'No' }
+				})
+			);
+			expect(result.success).toBe(false);
+		});
+
+		it('rejects missing initial', () => {
+			const result = ExperimentConfigSchema.safeParse(
+				phaseWithGate({
+					subsequent: {
+						text: { en: 'More?' },
+						yesLabel: { en: 'Yes' },
+						noLabel: { en: 'No' }
+					}
+				})
+			);
+			expect(result.success).toBe(false);
+		});
+
+		it('rejects initial missing required label', () => {
+			const result = ExperimentConfigSchema.safeParse(
+				phaseWithGate({
+					initial: {
+						text: { en: 'Engage?' },
+						yesLabel: { en: 'Yes' }
+						// noLabel missing
+					}
+				})
+			);
+			expect(result.success).toBe(false);
+		});
+	});
+
+	// Registration: select-or-other field type
+	describe('RegistrationField — select-or-other', () => {
+		const configWithField = (field: unknown) => ({
+			...makeMinimalConfig(),
+			registration: {
+				introduction: { title: { en: 'Intro' }, body: { en: 'Body' } },
+				fields: [field]
+			}
+		});
+
+		it('accepts select-or-other with options + otherLabel', () => {
+			const result = ExperimentConfigSchema.safeParse(
+				configWithField({
+					id: 'native_language',
+					type: 'select-or-other',
+					label: { en: 'Native language' },
+					options: [
+						{ value: 'en', label: { en: 'English' } },
+						{ value: 'ja', label: { en: 'Japanese' } }
+					],
+					otherLabel: { en: 'Other' }
+				})
+			);
+			expect(result.success).toBe(true);
+		});
+
+		it('rejects select-or-other without otherLabel', () => {
+			const result = ExperimentConfigSchema.safeParse(
+				configWithField({
+					id: 'native_language',
+					type: 'select-or-other',
+					label: { en: 'Native language' },
+					options: [{ value: 'en', label: { en: 'English' } }]
+				})
+			);
+			expect(result.success).toBe(false);
+		});
+
+		it('rejects select-or-other without options', () => {
+			const result = ExperimentConfigSchema.safeParse(
+				configWithField({
+					id: 'native_language',
+					type: 'select-or-other',
+					label: { en: 'Native language' },
+					otherLabel: { en: 'Other' }
+				})
+			);
+			expect(result.success).toBe(false);
+		});
+
+		it('rejects select-or-other with empty options', () => {
+			const result = ExperimentConfigSchema.safeParse(
+				configWithField({
+					id: 'native_language',
+					type: 'select-or-other',
+					label: { en: 'Native language' },
+					options: [],
+					otherLabel: { en: 'Other' }
+				})
+			);
+			expect(result.success).toBe(false);
+		});
+	});
+
+	// E2E fixture must stay valid against the current schema
+	it('validates the full-feature E2E fixture', () => {
+		const result = ExperimentConfigSchema.safeParse(fullFeatureFixture);
+		if (!result.success) {
+			console.error(JSON.stringify(result.error.issues, null, 2));
+		}
+		expect(result.success).toBe(true);
+	});
+
+	// FieldOption: showConditionalField removed (silently dropped on parse)
+	describe('FieldOption — showConditionalField removed', () => {
+		it('strips showConditionalField from parsed output', () => {
+			const result = ExperimentConfigSchema.safeParse({
+				...makeMinimalConfig(),
+				registration: {
+					introduction: { title: { en: 'Intro' }, body: { en: 'Body' } },
+					fields: [
+						{
+							id: 'choice',
+							type: 'select',
+							label: { en: 'Choice' },
+							options: [
+								{
+									value: 'other',
+									label: { en: 'Other' },
+									showConditionalField: 'follow_up'
+								}
+							]
+						}
+					]
+				}
+			});
+			expect(result.success).toBe(true);
+			if (result.success) {
+				const opt = result.data.registration.fields[0].options![0] as Record<string, unknown>;
+				expect(opt.showConditionalField).toBeUndefined();
+			}
+		});
 	});
 });

@@ -213,33 +213,53 @@
 							{:else}
 								<button type="button" onclick={() => {
 									config.phases[pi].gatekeeperQuestion = {
-										text: Object.fromEntries(languages.map((l) => [l, ''])),
-										yesLabel: Object.fromEntries(languages.map((l) => [l, l === 'en' ? 'Yes' : 'はい'])),
-										noLabel: Object.fromEntries(languages.map((l) => [l, l === 'en' ? 'No' : 'いいえ'])),
-										noResponseValue: 'null',
+										initial: {
+											text: Object.fromEntries(languages.map((l) => [l, ''])),
+											yesLabel: Object.fromEntries(languages.map((l) => [l, l === 'en' ? 'Yes' : 'はい'])),
+											noLabel: Object.fromEntries(languages.map((l) => [l, l === 'en' ? 'No' : 'いいえ']))
+										},
 										skipToNext: true
 									};
 								}} class="text-xs px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100 cursor-pointer">+ Add</button>
 							{/if}
 						</div>
 						{#if phase.gatekeeperQuestion}
-							<div class="space-y-2 pl-2 border-l-2 border-indigo-200">
-								<LocalizedInput label="Question Text" value={phase.gatekeeperQuestion.text} {languages} onchange={(v) => update(['phases', String(pi), 'gatekeeperQuestion', 'text'], v)} />
-								<div class="grid grid-cols-2 gap-2">
-									<LocalizedInput label="Yes Label" value={phase.gatekeeperQuestion.yesLabel} {languages} onchange={(v) => update(['phases', String(pi), 'gatekeeperQuestion', 'yesLabel'], v)} />
-									<LocalizedInput label="No Label" value={phase.gatekeeperQuestion.noLabel} {languages} onchange={(v) => update(['phases', String(pi), 'gatekeeperQuestion', 'noLabel'], v)} />
+							<div class="space-y-3 pl-2 border-l-2 border-indigo-200">
+								<div class="space-y-2">
+									<p class="text-[11px] uppercase tracking-wide text-gray-400 font-medium">First encounter</p>
+									<LocalizedInput label="Question Text" value={phase.gatekeeperQuestion.initial.text} {languages} onchange={(v) => update(['phases', String(pi), 'gatekeeperQuestion', 'initial', 'text'], v)} />
+									<div class="grid grid-cols-2 gap-2">
+										<LocalizedInput label="Yes Label" value={phase.gatekeeperQuestion.initial.yesLabel} {languages} onchange={(v) => update(['phases', String(pi), 'gatekeeperQuestion', 'initial', 'yesLabel'], v)} />
+										<LocalizedInput label="No Label" value={phase.gatekeeperQuestion.initial.noLabel} {languages} onchange={(v) => update(['phases', String(pi), 'gatekeeperQuestion', 'initial', 'noLabel'], v)} />
+									</div>
 								</div>
-								<div class="grid grid-cols-2 gap-2">
-									<Field label="No Response Value">
-										<input type="text" value={phase.gatekeeperQuestion.noResponseValue ?? 'null'}
-											oninput={(e) => update(['phases', String(pi), 'gatekeeperQuestion', 'noResponseValue'], e.currentTarget.value)}
-											class="w-full px-2 py-1 border border-gray-300 rounded text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-									</Field>
-									<label class="flex items-end gap-2 text-sm">
-										<input type="checkbox" checked={phase.gatekeeperQuestion.skipToNext ?? true} onchange={(e) => update(['phases', String(pi), 'gatekeeperQuestion', 'skipToNext'], e.currentTarget.checked)} />
-										Skip to Next on No
-									</label>
+								<div class="space-y-2">
+									<div class="flex items-center justify-between">
+										<p class="text-[11px] uppercase tracking-wide text-gray-400 font-medium">Subsequent encounter <span class="normal-case font-normal text-gray-400">(optional override; falls back to "First")</span></p>
+										{#if phase.gatekeeperQuestion.subsequent}
+											<button type="button" onclick={() => { delete config.phases[pi].gatekeeperQuestion!.subsequent; config.phases[pi] = config.phases[pi]; }} class="text-xs text-red-500 hover:text-red-700 cursor-pointer">Remove</button>
+										{:else}
+											<button type="button" onclick={() => {
+												config.phases[pi].gatekeeperQuestion!.subsequent = {
+													text: Object.fromEntries(languages.map((l) => [l, ''])),
+													yesLabel: Object.fromEntries(languages.map((l) => [l, l === 'en' ? 'Yes, add another' : 'はい、追加'])),
+													noLabel: Object.fromEntries(languages.map((l) => [l, l === 'en' ? 'No, done' : 'いいえ、完了']))
+												};
+											}} class="text-xs px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100 cursor-pointer">+ Add</button>
+										{/if}
+									</div>
+									{#if phase.gatekeeperQuestion.subsequent}
+										<LocalizedInput label="Question Text" value={phase.gatekeeperQuestion.subsequent.text} {languages} onchange={(v) => update(['phases', String(pi), 'gatekeeperQuestion', 'subsequent', 'text'], v)} />
+										<div class="grid grid-cols-2 gap-2">
+											<LocalizedInput label="Yes Label" value={phase.gatekeeperQuestion.subsequent.yesLabel} {languages} onchange={(v) => update(['phases', String(pi), 'gatekeeperQuestion', 'subsequent', 'yesLabel'], v)} />
+											<LocalizedInput label="No Label" value={phase.gatekeeperQuestion.subsequent.noLabel} {languages} onchange={(v) => update(['phases', String(pi), 'gatekeeperQuestion', 'subsequent', 'noLabel'], v)} />
+										</div>
+									{/if}
 								</div>
+								<label class="flex items-center gap-2 text-sm">
+									<input type="checkbox" checked={phase.gatekeeperQuestion.skipToNext ?? true} onchange={(e) => update(['phases', String(pi), 'gatekeeperQuestion', 'skipToNext'], e.currentTarget.checked)} />
+									Skip to Next on No
+								</label>
 							</div>
 						{/if}
 					</div>

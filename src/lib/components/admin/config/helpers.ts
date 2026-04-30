@@ -10,7 +10,7 @@ export function updatePath(config: ExperimentConfig, path: string[], value: unkn
 	target[path[path.length - 1]] = value;
 }
 
-export const fieldTypes = ['text', 'number', 'email', 'select', 'multiselect', 'textarea'] as const;
+export const fieldTypes = ['text', 'number', 'email', 'select', 'multiselect', 'textarea', 'select-or-other'] as const;
 export const widgetTypes = ['text', 'textarea', 'select', 'multiselect', 'likert', 'timestamp-range', 'audio-recording', 'slider', 'number'] as const;
 export const feedbackWidgetTypes = ['text', 'textarea', 'select', 'multiselect', 'likert', 'slider', 'number'] as const;
 export const stimulusTypes = ['video', 'image', 'audio', 'text', 'mixed'] as const;

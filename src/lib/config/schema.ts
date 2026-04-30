@@ -41,8 +41,7 @@ const LocalizedStringArray = z
 
 const FieldOption = z.object({
 	value: z.string(),
-	label: LocalizedString,
-	showConditionalField: z.string().optional()
+	label: LocalizedString
 });
 
 const FieldValidation = z.object({
@@ -52,20 +51,56 @@ const FieldValidation = z.object({
 	errorMessage: LocalizedString.optional()
 });
 
-const RegistrationField = z.object({
-	id: z.string(),
-	type: z.enum(['text', 'number', 'email', 'select', 'multiselect', 'textarea']),
-	label: LocalizedString,
-	placeholder: LocalizedString.optional(),
-	required: z.boolean().default(true),
-	validation: FieldValidation.optional(),
-	options: z.array(FieldOption).optional(),
-	conditionalOn: z.object({
-		field: z.string(),
-		value: z.string()
-	}).optional(),
-	defaultValue: z.string().optional()
-});
+// `select-or-other` is a single field type that combines a select with a free-
+// text fallback for "Other". The form's submitted value is always one string —
+// either an option value or whatever the participant typed. Replaces the
+// previous two-field pattern (a `select` with an `Other` option + a `text`
+// child gated by `conditionalOn`) which split one fact across two keys in
+// `registration_data`. See plan + scripts/migrate-select-or-other.ts.
+const RegistrationField = z
+	.object({
+		id: z.string(),
+		type: z.enum(['text', 'number', 'email', 'select', 'multiselect', 'textarea', 'select-or-other']),
+		label: LocalizedString,
+		placeholder: LocalizedString.optional(),
+		required: z.boolean().default(true),
+		validation: FieldValidation.optional(),
+		options: z.array(FieldOption).optional(),
+		// select-or-other only — label for the Other entry in the rendered list.
+		otherLabel: LocalizedString.optional(),
+		// select-or-other only — placeholder for the inline free-text input.
+		otherPlaceholder: LocalizedString.optional(),
+		conditionalOn: z.object({
+			field: z.string(),
+			value: z.string()
+		}).optional(),
+		defaultValue: z.string().optional()
+	})
+	.superRefine((f, ctx) => {
+		if (f.type === 'select-or-other') {
+			if (!f.options || f.options.length === 0) {
+				ctx.addIssue({
+					code: 'custom',
+					path: ['options'],
+					message: `field '${f.id}' (type=select-or-other) requires non-empty options`
+				});
+			}
+			if (!f.otherLabel) {
+				ctx.addIssue({
+					code: 'custom',
+					path: ['otherLabel'],
+					message: `field '${f.id}' (type=select-or-other) requires otherLabel`
+				});
+			}
+		}
+		if ((f.type === 'select' || f.type === 'multiselect') && (!f.options || f.options.length === 0)) {
+			ctx.addIssue({
+				code: 'custom',
+				path: ['options'],
+				message: `field '${f.id}' (type=${f.type}) requires non-empty options`
+			});
+		}
+	});
 
 const RegistrationIntro = z.object({
 	title: LocalizedString,
@@ -206,11 +241,23 @@ const ResponseWidget = z
 // Phases
 // ---------------------------------------------------------------------------
 
-const GatekeeperQuestion = z.object({
+// Gatekeeper is rendered above the response widgets on a stimulus and gates
+// engagement. `initial` is shown the first time a stimulus is reached;
+// `subsequent` (optional) overrides text/labels on re-prompts (after the
+// participant has saved at least one response and the phase is configured for
+// allowMultipleResponses). Falls back to `initial` when `subsequent` is
+// omitted. On No: first encounter writes a row with JSON null per widget
+// (skip), subsequent encounters just advance — see handleNo() in
+// src/routes/e/[slug]/[phaseSlug]/+page.svelte.
+const GatePromptText = z.object({
 	text: LocalizedString,
 	yesLabel: LocalizedString,
-	noLabel: LocalizedString,
-	noResponseValue: z.string().default('null'),
+	noLabel: LocalizedString
+});
+
+const GatekeeperQuestion = z.object({
+	initial: GatePromptText,
+	subsequent: GatePromptText.optional(),
 	skipToNext: z.boolean().default(true)
 });
 

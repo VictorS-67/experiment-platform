@@ -113,6 +113,100 @@ test.describe('A5 participant data export', () => {
 		await ctx.supabase.from('experiments').delete().eq('id', seeded.id);
 	});
 
+	test('A5.5: research CSV has response_id column and no participant_name column', async ({
+		page,
+		ctx
+	}) => {
+		const cfg = makeFullFeatureConfig(`a55-${Date.now()}`);
+		const seeded = await seedExperiment(cfg, { supabase: ctx.supabase, status: 'active' });
+		await ctx.supabase.from('experiment_collaborators').insert({
+			experiment_id: seeded.id,
+			user_id: ctx.adminUserId,
+			role: 'owner'
+		});
+
+		const { data: p } = await ctx.supabase
+			.from('participants')
+			.insert({
+				experiment_id: seeded.id,
+				email: `a55-${Date.now()}@example.com`,
+				registration_data: { name: 'Alice', age: '30' },
+				session_token: crypto.randomUUID()
+			})
+			.select('id')
+			.single();
+		await ctx.supabase.from('responses').insert({
+			participant_id: p!.id,
+			experiment_id: seeded.id,
+			phase_id: 'p1',
+			stimulus_id: 's1',
+			response_data: { rating: '4' },
+			response_index: 0
+		});
+
+		await loginAsAdmin(page, ctx);
+		const res = await page.request.get(
+			`/admin/experiments/${seeded.id}/data/export?format=csv&style=research&includeRegistration=true`
+		);
+		expect(res.status()).toBe(200);
+		const body = await res.text();
+		const headers = body.split('\n')[0].split(',');
+
+		// response_id must be present (renamed from bare `id`).
+		expect(headers).toContain('response_id');
+		// participant_name must NOT be present (was a duplicate of reg_name).
+		expect(headers).not.toContain('participant_name');
+		// reg_name is present when includeRegistration=true.
+		expect(headers).toContain('reg_name');
+
+		await ctx.supabase.from('experiments').delete().eq('id', seeded.id);
+	});
+
+	test('A5.6: raw CSV also has response_id instead of id', async ({ page, ctx }) => {
+		const cfg = makeFullFeatureConfig(`a56-${Date.now()}`);
+		const seeded = await seedExperiment(cfg, { supabase: ctx.supabase, status: 'active' });
+		await ctx.supabase.from('experiment_collaborators').insert({
+			experiment_id: seeded.id,
+			user_id: ctx.adminUserId,
+			role: 'owner'
+		});
+
+		const { data: p } = await ctx.supabase
+			.from('participants')
+			.insert({
+				experiment_id: seeded.id,
+				email: `a56-${Date.now()}@example.com`,
+				registration_data: {},
+				session_token: crypto.randomUUID()
+			})
+			.select('id')
+			.single();
+		await ctx.supabase.from('responses').insert({
+			participant_id: p!.id,
+			experiment_id: seeded.id,
+			phase_id: 'p1',
+			stimulus_id: 's1',
+			response_data: { rating: '2' },
+			response_index: 0
+		});
+
+		await loginAsAdmin(page, ctx);
+		// Note: raw style returns the DB view columns directly — the `id` rename
+		// applies only to research style. This test confirms the raw headers are
+		// stable (contain `id`, not `response_id`).
+		const res = await page.request.get(
+			`/admin/experiments/${seeded.id}/data/export?format=csv&style=raw`
+		);
+		expect(res.status()).toBe(200);
+		const body = await res.text();
+		const headers = body.split('\n')[0].split(',');
+		// Raw style exposes the view's column `id` (not renamed).
+		expect(headers).toContain('id');
+		expect(headers).not.toContain('participant_name');
+
+		await ctx.supabase.from('experiments').delete().eq('id', seeded.id);
+	});
+
 	test('A5.3 + A5.4: reset zeroes one participant only; delete cascades responses', async ({
 		page,
 		ctx

@@ -127,7 +127,7 @@
 		{#if showGatekeeper && firstPhase.gatekeeperQuestion}
 			<div class="mt-6 text-center">
 				<p class="text-sm font-medium mb-4">
-					{i18n.localized(firstPhase.gatekeeperQuestion.text)}
+					{i18n.localized(firstPhase.gatekeeperQuestion.initial.text)}
 				</p>
 				<div class="flex gap-4 justify-center">
 					<button
@@ -136,7 +136,7 @@
 						class="px-6 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors cursor-pointer"
 						onclick={handleGatekeeperYes}
 					>
-						{i18n.localized(firstPhase.gatekeeperQuestion.yesLabel, i18n.platform('common.yes'))}
+						{i18n.localized(firstPhase.gatekeeperQuestion.initial.yesLabel, i18n.platform('common.yes'))}
 					</button>
 					<button
 						type="button"
@@ -144,7 +144,7 @@
 						class="px-6 py-2 bg-gray-400 text-white rounded hover:bg-gray-500 transition-colors cursor-pointer"
 						onclick={handleGatekeeperNo}
 					>
-						{i18n.localized(firstPhase.gatekeeperQuestion.noLabel, i18n.platform('common.no'))}
+						{i18n.localized(firstPhase.gatekeeperQuestion.initial.noLabel, i18n.platform('common.no'))}
 					</button>
 				</div>
 			</div>

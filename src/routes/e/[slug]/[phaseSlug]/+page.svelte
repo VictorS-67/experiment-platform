@@ -102,6 +102,22 @@
 		return (currentItem as StimulusItemType).id;
 	});
 
+	// Gatekeeper state machine. `engage` is the first encounter on a stimulus
+	// (no prior responses); `continue` is the re-prompt after at least one
+	// response has been saved (only reachable when allowMultipleResponses=true).
+	// Both the gatekeeper render and handleNo branch on this — engage's "No"
+	// writes a skip row, continue's "No" just advances ("no more to add").
+	let gateMode = $derived<'engage' | 'continue'>(
+		(responseStore.byStimulus.get(currentItemId)?.length ?? 0) > 0 ? 'continue' : 'engage'
+	);
+	// Pick the prompt to render. Falls back to `initial` when `subsequent` is
+	// omitted from the config — backwards compatible with single-prompt configs.
+	let gatePrompt = $derived(
+		gateMode === 'continue' && phase?.gatekeeperQuestion?.subsequent
+			? phase.gatekeeperQuestion.subsequent
+			: phase?.gatekeeperQuestion?.initial
+	);
+
 	let mediaElement: HTMLMediaElement | undefined = $state(undefined);
 	let widgetValues = $state<Record<string, string>>({});
 	let audioBlobs = $state<Record<string, Blob>>({});
@@ -241,11 +257,21 @@
 	async function handleNo() {
 		if (!phase || !currentItem) return;
 
+		// On `continue` (re-prompt after at least one saved response), "No" means
+		// "no more to add" — just advance, don't write a skip row. On `engage`
+		// (first encounter), "No" writes a skip row with JSON null per widget so
+		// the dataset records "this stimulus was shown but the participant
+		// declined to engage."
+		if (gateMode === 'continue') {
+			advanceToNext();
+			return;
+		}
+
 		saving = true;
 		try {
 			const responseData: Record<string, unknown> = {};
 			for (const w of activeWidgets) {
-				responseData[w.id] = phase.gatekeeperQuestion?.noResponseValue ?? 'null';
+				responseData[w.id] = null;
 			}
 
 			const res = await fetch(`/e/${slug}/${phaseSlug}/save`, {
@@ -683,10 +709,10 @@
 		<!-- Gatekeeper + Response widgets: keyed by phase+index to force remount on every stimulus change -->
 		{#key `${phase.id}-${responseStore.currentIndex}`}
 			<!-- Gatekeeper question (stimulus-response only) -->
-			{#if showGatekeeper && phase.gatekeeperQuestion && !isReviewPhase}
+			{#if showGatekeeper && gatePrompt && !isReviewPhase}
 				<div class="mt-6 text-center">
 					<p class="text-sm font-medium mb-4">
-						{i18n.localized(phase.gatekeeperQuestion.text)}
+						{i18n.localized(gatePrompt.text)}
 					</p>
 					<div class="flex gap-4 justify-center">
 						<button
@@ -695,7 +721,7 @@
 							onclick={handleYes}
 							disabled={saving}
 						>
-							{i18n.localized(phase.gatekeeperQuestion.yesLabel, i18n.platform('common.yes'))}
+							{i18n.localized(gatePrompt.yesLabel, i18n.platform('common.yes'))}
 						</button>
 						<button
 							id="gatekeeper-no"
@@ -703,7 +729,7 @@
 							onclick={handleNo}
 							disabled={saving}
 						>
-							{i18n.localized(phase.gatekeeperQuestion.noLabel, i18n.platform('common.no'))}
+							{i18n.localized(gatePrompt.noLabel, i18n.platform('common.no'))}
 						</button>
 					</div>
 				</div>

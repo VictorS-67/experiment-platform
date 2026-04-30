@@ -92,8 +92,21 @@ function buildResearchRows(
 		regKeys.push(...[...regKeySet].sort());
 	}
 
+	// Column prefix conventions (keep this consistent for any new columns):
+	//   response_*       → response row identity (response_id, response_index)
+	//   stimulus_*       → stimulus identity / metadata
+	//   <phase_id>_*     → per-phase columns (currently just _created_at)
+	//   participant_*    → structural columns on the participants table (email, …)
+	//   reg_*            → flattened registration_data JSONB keys
+	//   <widget_id>      → response_data widget keys (admin-controlled, no prefix)
+	//
+	// `participant_name` was previously included as a duplicate of `reg_name`
+	// (both flattened from registration_data->>'name'); dropped to remove the
+	// inconsistency. When `includeRegistration=true`, the name still appears
+	// as `reg_name`. `id` was renamed to `response_id` so the prefix
+	// convention is uniform with `stimulus_id`.
 	const columns = [
-		'id',
+		'response_id',
 		'stimulus_id',
 		'stimulus_filename',
 		...stimulusMetaColumns,
@@ -101,7 +114,6 @@ function buildResearchRows(
 		...responseColumns,
 		...tsColumns,
 		'participant_email',
-		'participant_name',
 		...regKeys.map((k) => `reg_${k}`)
 	];
 
@@ -121,7 +133,7 @@ function buildResearchRows(
 
 		const stimItem = stimulusMap.get(String(firstRow.stimulus_id));
 		const merged: Row = {
-			id: firstRow.id,
+			response_id: firstRow.id,
 			stimulus_id: firstRow.stimulus_id,
 			stimulus_filename: stimItem?.filename ?? null,
 			response_index: firstRow.response_index
@@ -146,9 +158,9 @@ function buildResearchRows(
 			merged[tsCol] = phaseRow?.created_at ? fmtDate(phaseRow.created_at as string) : null;
 		}
 
-		// Participant info
+		// Participant info — `participant_name` deliberately omitted (was a
+		// duplicate of `reg_name`; see column-conventions comment above).
 		merged.participant_email = firstRow.participant_email;
-		merged.participant_name = firstRow.participant_name;
 		const rd = firstRow.registration_data as Record<string, unknown> | null;
 		for (const k of regKeys) merged[`reg_${k}`] = rd?.[k] ?? null;
 

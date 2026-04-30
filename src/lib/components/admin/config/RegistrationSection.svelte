@@ -131,13 +131,16 @@
 				{/if}
 			</div>
 
-			<!-- Options for select/multiselect registration fields -->
-			{#if field.type === 'select' || field.type === 'multiselect'}
+			<!-- Options for select/multiselect/select-or-other registration fields -->
+			{#if field.type === 'select' || field.type === 'multiselect' || field.type === 'select-or-other'}
 				<div class="border-t border-gray-100 pt-2 mt-2">
 					<div class="flex items-center justify-between mb-1">
 						<span class="text-xs text-gray-500">Options ({field.options?.length ?? 0})</span>
 						<button type="button" onclick={() => addFieldOption(i)} class="text-xs px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100 cursor-pointer">+ Add</button>
 					</div>
+					{#if field.type === 'select-or-other'}
+						<p class="text-xs text-gray-400 mb-1">These are the fixed options. An "Other" entry is added automatically at the end.</p>
+					{/if}
 					{#each field.options ?? [] as option, oi}
 						<div class="flex items-start gap-2 mb-1">
 							<input
@@ -151,18 +154,28 @@
 							<div class="flex-1">
 								<LocalizedInput label="" value={option.label} {languages} onchange={(v) => update(['registration', 'fields', String(i), 'options', String(oi), 'label'], v)} />
 							</div>
-							<input
-								type="text"
-								value={option.showConditionalField ?? ''}
-								oninput={(e) => update(['registration', 'fields', String(i), 'options', String(oi), 'showConditionalField'], e.currentTarget.value || undefined)}
-								aria-label="Show field when this option is selected"
-								class="w-28 shrink-0 px-2 py-1 border border-gray-300 rounded text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
-								placeholder="show field ID"
-								title="Field ID to show when this option is selected"
-							/>
 							<button type="button" onclick={() => removeFieldOption(i, oi)} class="text-xs text-red-500 hover:text-red-700 cursor-pointer mt-1">x</button>
 						</div>
 					{/each}
+				</div>
+			{/if}
+
+			<!-- otherLabel / otherPlaceholder for select-or-other fields -->
+			{#if field.type === 'select-or-other'}
+				<div class="border-t border-gray-100 pt-2 mt-2 space-y-2">
+					<span class="text-xs text-gray-500">"Other" option</span>
+					<LocalizedInput
+						label="Other label"
+						value={(field as Record<string, unknown>).otherLabel as Record<string, string> ?? Object.fromEntries(languages.map((l) => [l, '']))}
+						{languages}
+						onchange={(v) => update(['registration', 'fields', String(i), 'otherLabel'], v)}
+					/>
+					<LocalizedInput
+						label="Other placeholder"
+						value={(field as Record<string, unknown>).otherPlaceholder as Record<string, string> ?? Object.fromEntries(languages.map((l) => [l, '']))}
+						{languages}
+						onchange={(v) => update(['registration', 'fields', String(i), 'otherPlaceholder'], Object.values(v).some(Boolean) ? v : undefined)}
+					/>
 				</div>
 			{/if}
 

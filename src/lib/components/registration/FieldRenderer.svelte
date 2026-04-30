@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { RegistrationFieldType } from '$lib/config/schema';
 	import { i18n } from '$lib/i18n/index.svelte';
+	import SelectOrOtherField from './SelectOrOtherField.svelte';
 
 	let {
 		field,
@@ -63,5 +64,7 @@
 				<option value={option.value}>{i18n.localized(option.label, option.value)}</option>
 			{/each}
 		</select>
+	{:else if field.type === 'select-or-other'}
+		<SelectOrOtherField {field} bind:value />
 	{/if}
 </div>

@@ -20,11 +20,13 @@ ExperimentConfig
 │   │   ├── instructions: LocalizedStringArray?
 │   │   └── additionalInfo: LocalizedString?
 │   └── fields: RegistrationField[]
-│       ├── id, type (text|number|email|select|multiselect|textarea)
+│       ├── id, type (text|number|email|select|multiselect|textarea|select-or-other)
 │       ├── label: LocalizedString, placeholder: LocalizedString?
 │       ├── required: boolean, defaultValue: string?
 │       ├── validation: { min?, max?, pattern? (max 200 chars), errorMessage? }?
-│       ├── options: [{ value, label, showConditionalField? }]?
+│       ├── options: [{ value, label }]?                    # required for select/select-or-other
+│       ├── otherLabel: LocalizedString?                    # select-or-other only
+│       ├── otherPlaceholder: LocalizedString?              # select-or-other only
 │       └── conditionalOn: { field, value }?
 ├── tutorial: TutorialConfig | null
 │   ├── allowSkip: boolean?
@@ -41,8 +43,8 @@ ExperimentConfig
 │   ├── title: LocalizedString
 │   ├── introduction: { title, body }?
 │   ├── gatekeeperQuestion?
-│   │   ├── text, yesLabel, noLabel: LocalizedString
-│   │   ├── noResponseValue: string (default "null")
+│   │   ├── initial: { text, yesLabel, noLabel: LocalizedString }  # required
+│   │   ├── subsequent?: { text, yesLabel, noLabel: LocalizedString }  # re-prompt after a real response
 │   │   └── skipToNext: boolean (default true)
 │   ├── responseWidgets: ResponseWidget[]       # For stimulus-response phases
 │   ├── reviewConfig?                           # Required for review phases
@@ -72,6 +74,22 @@ ExperimentConfig
     ├── redirectUrl: string?
     └── showSummary: boolean?
 ```
+
+## Registration Field Types
+
+| Type | UI Component | Notes |
+|------|-------------|-------|
+| `text` | `<input type="text">` | |
+| `email` | `<input type="email">` | |
+| `number` | `<input type="number">` | Supports `validation.min` / `validation.max` |
+| `textarea` | `<textarea>` | |
+| `select` | `<select>` dropdown | Requires `options` |
+| `multiselect` | Toggle buttons | Requires `options` |
+| `select-or-other` | `<select>` + conditional text | Requires `options` + `otherLabel`. Adds an "Other" entry automatically; when picked, an inline text input appears. Stores a **single string** in `registration_data[id]` — either the chosen option's value or the typed free-text. The UI-only sentinel `__OTHER__` is never stored. |
+
+**`select-or-other` storage contract**: `registration_data[id]` is always a plain string. If it matches a known option value, the participant picked from the list. If it doesn't, they typed free-text via the Other path. Migrated from a legacy two-field pattern using `scripts/migrate-select-or-other.ts`.
+
+**`gatekeeperQuestion` behaviour**: The `initial` block renders on first encounter (no prior response for the stimulus); `subsequent` (if configured) renders on re-prompt after a real response. Clicking "No" on first encounter writes a skip row with JSON `null` per widget. Clicking "No" after a real response only advances — no DB write.
 
 ## Response Widget Types
 

@@ -9,6 +9,12 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
  *       second response is accepted, indexed at response_index=1.
  * P3.4: allowRevisit=false — StimulusNav is not rendered, and direct URL
  *       navigation back to a completed item shows it as read-only.
+ * P3.5a: Gatekeeper initial/subsequent text — after submitting a response the
+ *        gatekeeper should render the `subsequent` prompt text, not `initial`.
+ * P3.5b: Gatekeeper "No" after a response only advances — does not write a
+ *        skip row.
+ * P3.5c: Gatekeeper "No" on first encounter writes a skip row with JSON null
+ *        widget values.
  * P3.6: conditionalOn — widget B is hidden until widget A's value matches;
  *       hidden widgets save as null per the in-page logic.
  */
@@ -131,6 +137,142 @@ test.describe('P3 phase controls', () => {
 			await expect(page.locator('#gatekeeper-yes')).toBeVisible();
 			// Nav still hidden.
 			await expect(page.locator('#stimulus-nav')).toHaveCount(0);
+		} finally {
+			await supabase.from('experiments').delete().eq('id', seeded.id);
+		}
+	});
+
+	test('P3.5a: gatekeeper renders subsequent text after first response', async ({ page }) => {
+		test.setTimeout(60_000);
+
+		const cfg = makeFullFeatureConfig(`p35a-${Date.now()}`);
+		const phase = (cfg.phases as Array<Record<string, unknown>>)[0];
+		phase.allowMultipleResponses = true;
+		delete (phase as Record<string, unknown>).skipRules;
+		// Add a `subsequent` block with distinct text.
+		(phase.gatekeeperQuestion as Record<string, unknown>).subsequent = {
+			text: { en: 'Anything else to add?' },
+			yesLabel: { en: 'Yes, add another' },
+			noLabel: { en: 'No, done' }
+		};
+		const seeded = await seedExperiment(cfg, { supabase });
+
+		try {
+			const email = `p35a-${Date.now()}@example.com`;
+			await registerAndLand(page, seeded.slug, email);
+
+			// First encounter — initial text.
+			await expect(page.getByText('Have you seen this before?')).toBeVisible();
+
+			await page.locator('#gatekeeper-yes').click();
+			await page.getByRole('button', { name: '3' }).first().click();
+			await page.getByRole('button', { name: /^save$/i }).click();
+			await expect(page.getByText(/saved/i).first()).toBeVisible();
+
+			// After save — gatekeeper reappears with subsequent text.
+			await expect(page.getByText('Anything else to add?')).toBeVisible();
+			await expect(page.getByText('Yes, add another')).toBeVisible();
+			await expect(page.getByText('No, done')).toBeVisible();
+			// Initial text should NOT be visible.
+			await expect(page.getByText('Have you seen this before?')).toHaveCount(0);
+		} finally {
+			await supabase.from('experiments').delete().eq('id', seeded.id);
+		}
+	});
+
+	test('P3.5b: gatekeeper "No" after a real response advances without writing a skip row', async ({
+		page
+	}) => {
+		test.setTimeout(60_000);
+
+		const cfg = makeFullFeatureConfig(`p35b-${Date.now()}`);
+		const phase = (cfg.phases as Array<Record<string, unknown>>)[0];
+		phase.allowMultipleResponses = true;
+		delete (phase as Record<string, unknown>).skipRules;
+		const seeded = await seedExperiment(cfg, { supabase });
+
+		try {
+			const email = `p35b-${Date.now()}@example.com`;
+			await registerAndLand(page, seeded.slug, email);
+
+			// Submit one real response.
+			await page.locator('#gatekeeper-yes').click();
+			await page.getByRole('button', { name: '3' }).first().click();
+			await page.getByRole('button', { name: /^save$/i }).click();
+			await expect(page.getByText(/saved/i).first()).toBeVisible();
+
+			// Gatekeeper reappears — click No (subsequent encounter → should just advance).
+			await expect(page.locator('#gatekeeper-no')).toBeVisible();
+			await page.locator('#gatekeeper-no').click();
+
+			// Should advance to s2's gatekeeper, not stay on s1.
+			// (The initial text reappears for s2's first encounter.)
+			await expect(page.locator('#gatekeeper-yes')).toBeVisible();
+
+			// DB: only ONE response for s1 — no skip row written.
+			const { data: participant } = await supabase
+				.from('participants')
+				.select('id')
+				.eq('experiment_id', seeded.id)
+				.eq('email', email)
+				.single();
+			const { data: rows } = await supabase
+				.from('responses')
+				.select('response_index, response_data')
+				.eq('experiment_id', seeded.id)
+				.eq('participant_id', participant!.id)
+				.eq('phase_id', 'p1')
+				.eq('stimulus_id', 's1');
+			expect(rows?.length).toBe(1);
+		} finally {
+			await supabase.from('experiments').delete().eq('id', seeded.id);
+		}
+	});
+
+	test('P3.5c: gatekeeper "No" on first encounter writes skip row with null widget values', async ({
+		page
+	}) => {
+		test.setTimeout(60_000);
+
+		const cfg = makeFullFeatureConfig(`p35c-${Date.now()}`);
+		const phase = (cfg.phases as Array<Record<string, unknown>>)[0];
+		phase.allowMultipleResponses = true;
+		delete (phase as Record<string, unknown>).skipRules;
+		const seeded = await seedExperiment(cfg, { supabase });
+
+		try {
+			const email = `p35c-${Date.now()}@example.com`;
+			await registerAndLand(page, seeded.slug, email);
+
+			// First encounter — click No immediately (engage → skip row).
+			await expect(page.locator('#gatekeeper-no')).toBeVisible();
+			const saveResp = page.waitForResponse(
+				(r) => r.url().includes('/main/save') && r.request().method() === 'POST'
+			);
+			await page.locator('#gatekeeper-no').click();
+			const resp = await saveResp;
+			expect(resp.status()).toBe(200);
+
+			// DB: one skip row for s1 with null widget values.
+			const { data: participant } = await supabase
+				.from('participants')
+				.select('id')
+				.eq('experiment_id', seeded.id)
+				.eq('email', email)
+				.single();
+			const { data: rows } = await supabase
+				.from('responses')
+				.select('response_data')
+				.eq('experiment_id', seeded.id)
+				.eq('participant_id', participant!.id)
+				.eq('phase_id', 'p1')
+				.eq('stimulus_id', 's1');
+			expect(rows?.length).toBe(1);
+			const data = rows![0].response_data as Record<string, unknown>;
+			// All widget values must be JSON null (not the string "null").
+			for (const val of Object.values(data)) {
+				expect(val).toBeNull();
+			}
 		} finally {
 			await supabase.from('experiments').delete().eq('id', seeded.id);
 		}

@@ -114,6 +114,142 @@ test.describe('P1 registration', () => {
 		expect(cookies.some((c) => c.name === 'session_token')).toBe(true);
 	});
 
+	test('P1.6: select-or-other picks known option → stores option value directly', async ({
+		page
+	}) => {
+		// Seed a fresh experiment with a select-or-other field.
+		const cfg = makeFullFeatureConfig(`p16-${Date.now()}`);
+		(cfg.registration.fields as Array<Record<string, unknown>>).push({
+			id: 'native_language',
+			type: 'select-or-other',
+			label: { en: 'Native language' },
+			required: true,
+			options: [
+				{ value: 'english', label: { en: 'English' } },
+				{ value: 'japanese', label: { en: 'Japanese' } }
+			],
+			otherLabel: { en: 'Other' },
+			otherPlaceholder: { en: 'Please specify' }
+		});
+		const soSeeded = await seedExperiment(cfg, { supabase });
+
+		try {
+			const email = `p16-${Date.now()}@example.com`;
+			await page.goto(`/e/${soSeeded.slug}`);
+			await page.getByLabel(/email/i).fill(email);
+			await page.getByRole('button', { name: /continue|submit|next/i }).first().click();
+
+			await page.getByLabel(/age/i).fill('28');
+			await page.getByLabel(/country/i).selectOption('us');
+			// Pick a known option — no free-text input should appear.
+			await page.getByLabel(/native language/i).selectOption('english');
+			await expect(page.getByPlaceholder(/please specify/i)).toHaveCount(0);
+			await page.getByRole('button', { name: /register/i }).click();
+			await page.waitForURL(/\/main/);
+
+			const { data: row } = await supabase
+				.from('participants')
+				.select('registration_data')
+				.eq('experiment_id', soSeeded.id)
+				.eq('email', email)
+				.maybeSingle();
+			// Single key, string value — not the UI marker.
+			expect((row!.registration_data as Record<string, string>).native_language).toBe('english');
+		} finally {
+			await supabase.from('experiments').delete().eq('id', soSeeded.id);
+		}
+	});
+
+	test('P1.7: select-or-other picks Other → stores typed text as single value', async ({
+		page
+	}) => {
+		const cfg = makeFullFeatureConfig(`p17-${Date.now()}`);
+		(cfg.registration.fields as Array<Record<string, unknown>>).push({
+			id: 'native_language',
+			type: 'select-or-other',
+			label: { en: 'Native language' },
+			required: true,
+			options: [
+				{ value: 'english', label: { en: 'English' } },
+				{ value: 'japanese', label: { en: 'Japanese' } }
+			],
+			otherLabel: { en: 'Other' },
+			otherPlaceholder: { en: 'Please specify' }
+		});
+		const soSeeded = await seedExperiment(cfg, { supabase });
+
+		try {
+			const email = `p17-${Date.now()}@example.com`;
+			await page.goto(`/e/${soSeeded.slug}`);
+			await page.getByLabel(/email/i).fill(email);
+			await page.getByRole('button', { name: /continue|submit|next/i }).first().click();
+
+			await page.getByLabel(/age/i).fill('35');
+			await page.getByLabel(/country/i).selectOption('us');
+			// Pick Other → inline text input appears.
+			await page.getByLabel(/native language/i).selectOption('__OTHER__');
+			const freeText = page.getByPlaceholder(/please specify/i);
+			await expect(freeText).toBeVisible();
+			await freeText.fill('French');
+			await page.getByRole('button', { name: /register/i }).click();
+			await page.waitForURL(/\/main/);
+
+			const { data: row } = await supabase
+				.from('participants')
+				.select('registration_data')
+				.eq('experiment_id', soSeeded.id)
+				.eq('email', email)
+				.maybeSingle();
+			const rd = row!.registration_data as Record<string, string>;
+			// Single key with the typed text — marker never stored.
+			expect(rd.native_language).toBe('French');
+			expect(Object.keys(rd)).not.toContain('__OTHER__');
+		} finally {
+			await supabase.from('experiments').delete().eq('id', soSeeded.id);
+		}
+	});
+
+	test('P1.8: select-or-other required + Other picked but empty → validation error', async ({
+		page
+	}) => {
+		const cfg = makeFullFeatureConfig(`p18-${Date.now()}`);
+		(cfg.registration.fields as Array<Record<string, unknown>>).push({
+			id: 'native_language',
+			type: 'select-or-other',
+			label: { en: 'Native language' },
+			required: true,
+			options: [{ value: 'english', label: { en: 'English' } }],
+			otherLabel: { en: 'Other' }
+		});
+		const soSeeded = await seedExperiment(cfg, { supabase });
+
+		try {
+			const email = `p18-${Date.now()}@example.com`;
+			await page.goto(`/e/${soSeeded.slug}`);
+			await page.getByLabel(/email/i).fill(email);
+			await page.getByRole('button', { name: /continue|submit|next/i }).first().click();
+
+			await page.getByLabel(/age/i).fill('25');
+			await page.getByLabel(/country/i).selectOption('us');
+			await page.getByLabel(/native language/i).selectOption('__OTHER__');
+			// Leave free-text input empty and submit.
+			await page.getByRole('button', { name: /register/i }).click();
+			// Should NOT navigate away — form validation should block submission.
+			await expect(page.getByRole('button', { name: /register/i })).toBeVisible();
+
+			// No participant row should be written.
+			const { data: row } = await supabase
+				.from('participants')
+				.select('id')
+				.eq('experiment_id', soSeeded.id)
+				.eq('email', email)
+				.maybeSingle();
+			expect(row).toBeNull();
+		} finally {
+			await supabase.from('experiments').delete().eq('id', soSeeded.id);
+		}
+	});
+
 	test('P1.5: email with caps + whitespace is normalized to lowercase + trimmed', async ({
 		page
 	}) => {

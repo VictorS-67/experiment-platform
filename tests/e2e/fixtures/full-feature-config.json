@@ -52,10 +52,11 @@
         "body": { "en": "Rate each item.", "ja": "各項目を評価してください。" }
       },
       "gatekeeperQuestion": {
-        "text": { "en": "Have you seen this before?", "ja": "これを見たことがありますか?" },
-        "yesLabel": { "en": "Yes", "ja": "はい" },
-        "noLabel": { "en": "No", "ja": "いいえ" },
-        "noResponseValue": "never_seen",
+        "initial": {
+          "text": { "en": "Have you seen this before?", "ja": "これを見たことがありますか?" },
+          "yesLabel": { "en": "Yes", "ja": "はい" },
+          "noLabel": { "en": "No", "ja": "いいえ" }
+        },
         "skipToNext": true
       },
       "responseWidgets": [

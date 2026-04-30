@@ -9,7 +9,8 @@ Config-driven experiment/survey platform for academic research. SvelteKit 5 + Su
 ## Quick Commands
 
 ```bash
-npm run dev          # Dev server → http://localhost:5173/
+npm run dev          # Dev server → http://localhost:5173/ (online Supabase, uses .env)
+npm run dev:local    # Dev server with local Supabase (uses .env + .env.local-db overrides)
 npm run build        # Production build
 npm run check        # svelte-check (type errors)
 npm run test         # Vitest (unit + server-handler tests)
@@ -17,18 +18,19 @@ npm run test:e2e     # Playwright E2E (requires local Supabase running)
 node scripts/seed.js # Seed experiment config into DB
 ```
 
+## Switching between online and local Supabase
+
+- `.env` — online Supabase credentials (committed, used by default)
+- `.env.local-db` — local Supabase overrides (gitignored, used by `dev:local`)
+
+`npm run dev` hits the online DB. `npm run dev:local` hits local Supabase at `http://127.0.0.1:54321`. Run `supabase start` before using the local mode.
+
 ## Running E2E tests locally
 
 ```bash
 supabase start                          # starts Postgres + GoTrue + Storage in Docker
 eval "$(supabase status -o env)"        # exports API_URL, ANON_KEY, SERVICE_ROLE_KEY
-# .env.local takes precedence over .env in Vite — the dev server picks this up
-cat > .env.local <<EOF
-PUBLIC_SUPABASE_URL=$API_URL
-PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY
-SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY
-EOF
-# Restart any running `npm run dev` — env is cached at boot
+# .env.local-db holds local overrides — update it if your local keys change
 export PUBLIC_SUPABASE_URL=$API_URL PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY
 npm run test:e2e                        # boots dev server via webServer + runs specs
 supabase stop
@@ -116,6 +118,20 @@ Must be an immediate child of `{#each}`, `{#if}`, `{:else}` blocks — not insid
 
 ### Config dirty-state comparison
 The Save Config indicator (`●`) compares against a canonical key-sorted JSON of `data.experiment.config`, not raw stringify. Postgres JSONB doesn't preserve key order on read AND Zod fills in defaults on parse — naive `JSON.stringify` comparison shows phantom dirty state forever. Re-sync `configJson` / `configState` from `data.experiment.config` inside the `enhance` callback after `await update({ reset: false })`.
+
+### Gatekeeper `gateMode` state machine
+The phase page derives `gateMode: 'engage' | 'continue'` from whether any prior response exists for the current stimulus (`responseStore.byStimulus.get(currentItemId)?.length > 0`). This drives two behaviors:
+- **`gatePrompt`**: picks `phase.gatekeeperQuestion.subsequent` (if configured) when `gateMode === 'continue'`, otherwise always `phase.gatekeeperQuestion.initial`.
+- **`handleNo()`**: when `gateMode === 'continue'` → just advance to next stimulus, no DB write; when `gateMode === 'engage'` → write a skip row with JSON `null` per widget, then advance.
+
+### `GatekeeperQuestion` schema shape
+The gatekeeper uses a nested `{initial, subsequent?}` shape — NOT the old flat `{text, yesLabel, noLabel}`. Flat configs must be migrated with `scripts/migrate-configs.ts` before deploying code that reads the new shape. The E2E fixture at `tests/e2e/fixtures/full-feature-config.json` and all prod configs must use the nested shape.
+
+### `select-or-other` field type — storage contract
+The `select-or-other` registration field stores a **single string** in `registration_data[id]`: either a selected option's value string, or the participant's typed free-text when they chose "Other". The UI-only sentinel `__OTHER__` must NEVER be stored — it exists only in `SelectOrOtherField.svelte`'s local state to track which branch is active. When building analysis scripts, treat `registration_data[id]` as an opaque string; if the value matches no known option, it was typed free-text via the Other path.
+
+### Skip rows write JSON null (not string)
+Since the gatekeeper "No" handler fix, new skip rows store `null` (JSON null) per widget key — e.g. `{rating: null, comment: null}`. Legacy rows written before the fix may contain a string sentinel (e.g. `"null"`). Use `scripts/migrate-skip-rows.ts` to normalize legacy rows. When reading skip rows in analysis code, filter by `value IS NULL OR value = '<sentinel>'` until the normalization migration has run.
 
 ## Credentials
 
