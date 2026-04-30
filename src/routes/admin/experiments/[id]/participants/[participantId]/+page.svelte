@@ -182,7 +182,17 @@
 											{@const widget = widgets.find((w) => w.id === key)}
 											<div class="flex gap-2 text-sm">
 												<dt class="text-gray-500 shrink-0">{widget ? getLabel(widget.label) : key}:</dt>
-												<dd class="text-gray-800">{String(value ?? '—')}</dd>
+												<dd class="text-gray-800">
+													{#if typeof value === 'string' && /^audio\/.+\.(webm|mp3|ogg|wav|m4a)$/i.test(value)}
+														{#if data.signedAudioUrls?.[value]}
+															<audio src={data.signedAudioUrls[value]} controls class="h-8 w-48 align-middle"></audio>
+														{:else}
+															<span class="font-mono text-xs text-gray-500">{value}</span>
+														{/if}
+													{:else}
+														{String(value ?? '—')}
+													{/if}
+												</dd>
 											</div>
 										{/each}
 									</dl>

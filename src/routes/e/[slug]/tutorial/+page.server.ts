@@ -1,5 +1,6 @@
 import type { PageServerLoad } from './$types';
 import { getParticipantByToken } from '$lib/server/data';
+import { signStimuliUrls } from '$lib/server/storage';
 import { redirect } from '@sveltejs/kit';
 
 export const load: PageServerLoad = async ({ locals, parent }) => {
@@ -29,5 +30,6 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 		registeredAt: participant.registered_at
 	};
 
-	return { participant: participantData };
+	const signedUrls = await signStimuliUrls(experiment.config.stimuli);
+	return { participant: participantData, signedUrls };
 };

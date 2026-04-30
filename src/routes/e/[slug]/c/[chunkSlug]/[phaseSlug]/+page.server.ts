@@ -6,8 +6,21 @@ import {
 	saveChunkAssignment,
 	getParticipantIndex
 } from '$lib/server/data';
+import { signStimuliUrls, signAudioUrls } from '$lib/server/storage';
+import type { ResponseRecord } from '$lib/services/data';
 import { latinSquareOrder, seededShuffle } from '$lib/utils';
 import { redirect } from '@sveltejs/kit';
+
+function extractAudioPaths(responses: ResponseRecord[]): string[] {
+	const paths: string[] = [];
+	for (const r of responses) {
+		for (const val of Object.values(r.response_data)) {
+			if (typeof val === 'string' && /^audio\/.+\.(webm|mp3|ogg|wav|m4a)$/i.test(val))
+				paths.push(val);
+		}
+	}
+	return paths;
+}
 
 export const load: PageServerLoad = async ({ locals, parent, params }) => {
 	const { experiment } = await parent();
@@ -103,9 +116,17 @@ export const load: PageServerLoad = async ({ locals, parent, params }) => {
 	if (phase.type === 'review' && phase.reviewConfig) {
 		const sourceResponses = await loadResponses(experimentId, participant.id, phase.reviewConfig.sourcePhase);
 		const responses = await loadResponses(experimentId, participant.id, phase.id);
-		return { participant: participantData, responses, sourceResponses, phase, orderedStimulusIds, chunkSlug, blockBoundaries, breakScreen };
+		const [stimuliUrls, audioUrls] = await Promise.all([
+			signStimuliUrls(experiment.config.stimuli),
+			signAudioUrls(extractAudioPaths([...sourceResponses, ...responses]))
+		]);
+		return { participant: participantData, responses, sourceResponses, phase, orderedStimulusIds, chunkSlug, blockBoundaries, breakScreen, signedUrls: { ...stimuliUrls, ...audioUrls } };
 	}
 
 	const responses = await loadResponses(experimentId, participant.id, phase.id);
-	return { participant: participantData, responses, phase, orderedStimulusIds, chunkSlug, blockBoundaries, breakScreen };
+	const [stimuliUrls, audioUrls] = await Promise.all([
+		signStimuliUrls(experiment.config.stimuli),
+		signAudioUrls(extractAudioPaths(responses))
+	]);
+	return { participant: participantData, responses, phase, orderedStimulusIds, chunkSlug, blockBoundaries, breakScreen, signedUrls: { ...stimuliUrls, ...audioUrls } };
 };

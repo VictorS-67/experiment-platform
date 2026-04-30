@@ -1,6 +1,19 @@
 import type { PageServerLoad } from './$types';
 import { getParticipantByToken, loadResponses } from '$lib/server/data';
+import { signStimuliUrls, signAudioUrls } from '$lib/server/storage';
+import type { ResponseRecord } from '$lib/services/data';
 import { redirect } from '@sveltejs/kit';
+
+function extractAudioPaths(responses: ResponseRecord[]): string[] {
+	const paths: string[] = [];
+	for (const r of responses) {
+		for (const val of Object.values(r.response_data)) {
+			if (typeof val === 'string' && /^audio\/.+\.(webm|mp3|ogg|wav|m4a)$/i.test(val))
+				paths.push(val);
+		}
+	}
+	return paths;
+}
 
 export const load: PageServerLoad = async ({ locals, parent, params }) => {
 	const { experiment } = await parent();
@@ -40,10 +53,18 @@ export const load: PageServerLoad = async ({ locals, parent, params }) => {
 			phase.reviewConfig.sourcePhase
 		);
 		const responses = await loadResponses(experimentId, participant.id, phase.id);
-		return { participant: participantData, responses, sourceResponses, phase };
+		const [stimuliUrls, audioUrls] = await Promise.all([
+			signStimuliUrls(experiment.config.stimuli),
+			signAudioUrls(extractAudioPaths([...sourceResponses, ...responses]))
+		]);
+		return { participant: participantData, responses, sourceResponses, phase, signedUrls: { ...stimuliUrls, ...audioUrls } };
 	}
 
 	// Stimulus-response phase
 	const responses = await loadResponses(experimentId, participant.id, phase.id);
-	return { participant: participantData, responses, phase };
+	const [stimuliUrls, audioUrls] = await Promise.all([
+		signStimuliUrls(experiment.config.stimuli),
+		signAudioUrls(extractAudioPaths(responses))
+	]);
+	return { participant: participantData, responses, phase, signedUrls: { ...stimuliUrls, ...audioUrls } };
 };

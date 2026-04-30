@@ -7,10 +7,12 @@
 	let {
 		item,
 		config,
+		src = undefined,
 		mediaElement = $bindable(undefined)
 	}: {
 		item: StimulusItemType;
 		config: StimuliConfigType;
+		src?: string;
 		mediaElement?: HTMLMediaElement | undefined;
 	} = $props();
 
@@ -21,6 +23,7 @@
 	}
 
 	function resolveUrl(item: StimulusItemType): string {
+		if (src) return src;
 		if (item.url) return item.url;
 		if (item.filename && config.storagePath) {
 			return `${PUBLIC_SUPABASE_URL}/storage/v1/object/public/${config.storagePath}${item.filename}`;
@@ -30,7 +33,7 @@
 </script>
 
 {#if stimulusType === 'video'}
-	<VideoPlayer {item} {config} bind:mediaElement={mediaElement as HTMLVideoElement | undefined} />
+	<VideoPlayer {item} {config} {src} bind:mediaElement={mediaElement as HTMLVideoElement | undefined} />
 {:else if stimulusType === 'image'}
 	<div class="w-full rounded-lg overflow-hidden" id="stimulus-player">
 		<img src={resolveUrl(item)} alt={i18n.localized(item.label, item.id)} class="w-full" />

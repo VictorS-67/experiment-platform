@@ -10,12 +10,16 @@
 		sourceResponse,
 		stimuliConfig,
 		stimulusItem,
+		stimulusSrc = undefined,
+		signedUrls = undefined,
 		replayMode = 'segment',
 		mediaElement = $bindable(undefined)
 	}: {
 		sourceResponse: ResponseRecord;
 		stimuliConfig: StimuliConfigType;
 		stimulusItem: StimulusItemType | undefined;
+		stimulusSrc?: string;
+		signedUrls?: Record<string, string>;
 		replayMode?: 'segment' | 'full-highlight';
 		mediaElement?: HTMLMediaElement | undefined;
 	} = $props();
@@ -64,7 +68,7 @@
 
 {#if stimulusItem}
 	<div class="rounded-lg transition-all duration-200" class:ring-4={highlightActive} class:ring-indigo-500={highlightActive}>
-		<StimulusRenderer item={stimulusItem} config={stimuliConfig} bind:mediaElement />
+		<StimulusRenderer item={stimulusItem} config={stimuliConfig} src={stimulusSrc} bind:mediaElement />
 	</div>
 {/if}
 
@@ -78,7 +82,7 @@
 	{#each parsed.audios as { key, path }}
 		<div class="text-sm text-blue-700 mb-1">
 			<strong>{key}:</strong>
-			<audio src="{PUBLIC_SUPABASE_URL}/storage/v1/object/public/experiments/{path}" controls class="inline h-8 w-48 align-middle ml-1"></audio>
+			<audio src={signedUrls?.[path] ?? `${PUBLIC_SUPABASE_URL}/storage/v1/object/public/experiments/${path}`} controls class="inline h-8 w-48 align-middle ml-1"></audio>
 		</div>
 	{/each}
 	{#each parsed.timestamps as { widgetId, start, end }}

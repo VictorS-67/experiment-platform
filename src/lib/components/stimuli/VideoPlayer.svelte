@@ -15,14 +15,16 @@
 	let {
 		item,
 		config,
+		src: srcProp = undefined,
 		mediaElement = $bindable(undefined)
 	}: {
 		item: StimulusItemType;
 		config: StimuliConfigType;
+		src?: string;
 		mediaElement?: HTMLVideoElement | undefined;
 	} = $props();
 
-	let src = $derived(getStimulusVideoUrl(item, config));
+	let src = $derived(srcProp ?? getStimulusVideoUrl(item, config));
 </script>
 
 <div class="w-full rounded-lg overflow-hidden bg-black" id="stimulus-player">

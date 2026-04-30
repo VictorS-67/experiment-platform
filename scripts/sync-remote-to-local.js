@@ -247,14 +247,14 @@ async function main() {
 async function syncStorageBucket() {
 	const BUCKET = 'experiments';
 
-	// Ensure the local bucket exists and is public
-	const { error: bucketErr } = await local.storage.createBucket(BUCKET, { public: true });
+	// Ensure the local bucket exists and is private (matching production)
+	const { error: bucketErr } = await local.storage.createBucket(BUCKET, { public: false });
 	if (bucketErr) {
 		if (!bucketErr.message.toLowerCase().includes('already exists')) {
 			throw new Error(`createBucket: ${bucketErr.message}`);
 		}
-		// Bucket already exists — make sure it's public
-		const { error: updateErr } = await local.storage.updateBucket(BUCKET, { public: true });
+		// Bucket already exists — ensure it's private to match production
+		const { error: updateErr } = await local.storage.updateBucket(BUCKET, { public: false });
 		if (updateErr) throw new Error(`updateBucket: ${updateErr.message}`);
 	}
 

@@ -110,6 +110,13 @@
 	// response has been saved (only reachable when allowMultipleResponses=true).
 	// Both the gatekeeper render and handleNo branch on this — engage's "No"
 	// writes a skip row, continue's "No" just advances ("no more to add").
+	let signedUrls = $derived((data as Record<string, unknown>).signedUrls as Record<string, string> | undefined ?? {});
+
+	// Signed URL for the current stimulus (undefined for review phases — those go through ReviewItemDisplay)
+	let currentSrc = $derived(!isReviewPhase && currentStimulusItem
+		? (signedUrls[(currentItem as StimulusItemType).id] || undefined)
+		: undefined);
+
 	// Prefetch the next video so it starts loading while the participant is on the current one.
 	// Works for both regular and review phases; restricted to video stimuli only.
 	let nextVideoUrl = $derived.by(() => {
@@ -124,7 +131,7 @@
 			nextStimulusItem = nextItem as StimulusItemType;
 		}
 		if (!nextStimulusItem || !config.stimuli) return null;
-		return getStimulusVideoUrl(nextStimulusItem, config.stimuli) || null;
+		return signedUrls[nextStimulusItem.id] || getStimulusVideoUrl(nextStimulusItem, config.stimuli) || null;
 	});
 
 	let gateMode = $derived<'engage' | 'continue'>(
@@ -715,6 +722,8 @@
 					sourceResponse={currentItem as ResponseRecord}
 					stimuliConfig={config.stimuli}
 					stimulusItem={currentStimulusItem ?? undefined}
+					stimulusSrc={currentStimulusItem ? (signedUrls[currentStimulusItem.id] || undefined) : undefined}
+					{signedUrls}
 					replayMode={phase.reviewConfig?.replayMode ?? 'segment'}
 					bind:mediaElement
 				/>
@@ -723,6 +732,7 @@
 					<StimulusRenderer
 						item={currentItem as StimulusItemType}
 						config={config.stimuli}
+						src={currentSrc}
 						bind:mediaElement
 					/>
 				</div>
@@ -750,7 +760,7 @@
 								<span class="mr-3">
 									<strong>{key}:</strong>
 									{#if widgetTypeMap.get(key) === 'audio-recording' && typeof val === 'string'}
-										<audio src="{PUBLIC_SUPABASE_URL}/storage/v1/object/public/experiments/{val}" controls class="inline h-8 w-48 align-middle ml-1"></audio>
+										<audio src={signedUrls[val] ?? `${PUBLIC_SUPABASE_URL}/storage/v1/object/public/experiments/${val}`} controls class="inline h-8 w-48 align-middle ml-1"></audio>
 									{:else}
 										{val}
 									{/if}
@@ -832,7 +842,7 @@
 								<span class="mr-3">
 									<strong>{key}:</strong>
 									{#if widgetTypeMap.get(key) === 'audio-recording' && typeof val === 'string'}
-										<audio src="{PUBLIC_SUPABASE_URL}/storage/v1/object/public/experiments/{val}" controls class="inline h-8 w-48 align-middle ml-1"></audio>
+										<audio src={signedUrls[val] ?? `${PUBLIC_SUPABASE_URL}/storage/v1/object/public/experiments/${val}`} controls class="inline h-8 w-48 align-middle ml-1"></audio>
 									{:else}
 										{val}
 									{/if}

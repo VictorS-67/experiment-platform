@@ -10,6 +10,11 @@ const mode = modeArgIdx >= 0 ? process.argv[modeArgIdx + 1] : 'development';
 const env = loadEnv(mode, process.cwd(), '');
 const supabaseUrl = env.PUBLIC_SUPABASE_URL ?? process.env.PUBLIC_SUPABASE_URL ?? '';
 
+// In non-production builds always whitelist the default local Supabase port so
+// that `npm run dev:local` (which generates signed URLs from 127.0.0.1:54321)
+// isn't blocked by CSP even if loadEnv doesn't pick up .env.local-db.
+const localOrigins = mode !== 'production' ? ['http://127.0.0.1:54321'] : [];
+
 /** @type {import('@sveltejs/kit').Config} */
 const config = {
 	kit: {
@@ -39,9 +44,9 @@ const config = {
 				'style-src': ['self', 'https://fonts.googleapis.com'],
 				'style-src-attr': ['unsafe-inline'],
 				'font-src': ['self', 'https://fonts.gstatic.com'],
-				'img-src': ['self', 'data:', 'blob:', supabaseUrl],
-				'media-src': ['self', 'blob:', supabaseUrl],
-				'connect-src': ['self', supabaseUrl],
+				'img-src': ['self', 'data:', 'blob:', supabaseUrl, ...localOrigins],
+				'media-src': ['self', 'blob:', supabaseUrl, ...localOrigins],
+				'connect-src': ['self', supabaseUrl, ...localOrigins],
 				'frame-ancestors': ['none']
 			}
 		}

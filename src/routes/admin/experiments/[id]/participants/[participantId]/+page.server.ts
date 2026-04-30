@@ -3,6 +3,7 @@ import { error, fail, isRedirect, redirect } from '@sveltejs/kit';
 import { getExperiment, getParticipantDetail, deleteParticipant, resetParticipantResponses } from '$lib/server/admin';
 import { requireExperimentAccess } from '$lib/server/collaborators';
 import { logAdminAction } from '$lib/server/audit';
+import { signAudioUrls } from '$lib/server/storage';
 
 export const load: PageServerLoad = async ({ params, locals }) => {
 	await requireExperimentAccess(locals.adminUser, params.id, 'viewer');
@@ -15,7 +16,18 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	const detail = await getParticipantDetail(params.participantId, params.id);
 	if (!detail) error(404, 'Participant not found');
 
-	return { experiment, participant: detail.participant, responsesByPhase: detail.responsesByPhase };
+	const audioPaths: string[] = [];
+	for (const responses of Object.values(detail.responsesByPhase)) {
+		for (const r of responses) {
+			for (const val of Object.values(r.responseData)) {
+				if (typeof val === 'string' && /^audio\/.+\.(webm|mp3|ogg|wav|m4a)$/i.test(val))
+					audioPaths.push(val);
+			}
+		}
+	}
+	const signedAudioUrls = await signAudioUrls([...new Set(audioPaths)]);
+
+	return { experiment, participant: detail.participant, responsesByPhase: detail.responsesByPhase, signedAudioUrls };
 };
 
 export const actions: Actions = {

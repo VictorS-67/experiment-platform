@@ -13,6 +13,7 @@
 
 	let { data } = $props();
 
+	let signedUrls = $derived((data as Record<string, unknown>).signedUrls as Record<string, string> | undefined ?? {});
 	let config = $derived(experiment.config);
 	let slug = $derived($page.params.slug);
 	let tutorial = $derived(config?.tutorial as TutorialConfigType | null);
@@ -119,6 +120,7 @@
 			<StimulusRenderer
 				item={sampleItem}
 				config={config.stimuli}
+				src={signedUrls[sampleItem.id] || undefined}
 				bind:mediaElement
 			/>
 		</div>
