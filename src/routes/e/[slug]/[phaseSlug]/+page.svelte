@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { tick } from 'svelte';
 	import { page } from '$app/stores';
 	import { experiment } from '$lib/stores/experiment.svelte';
 	import { participantStore } from '$lib/stores/participant.svelte';
@@ -12,6 +13,8 @@
 	import StimulusNav from '$lib/components/layout/StimulusNav.svelte';
 	import Modal from '$lib/components/layout/Modal.svelte';
 	import StimulusRenderer from '$lib/components/stimuli/StimulusRenderer.svelte';
+	import { getStimulusVideoUrl } from '$lib/components/stimuli/VideoPlayer.svelte';
+	import { PUBLIC_SUPABASE_URL } from '$env/static/public';
 	import WidgetRenderer from '$lib/components/widgets/WidgetRenderer.svelte';
 	import ReviewItemDisplay from '$lib/components/review/ReviewItemDisplay.svelte';
 	import type { StimulusItemType, PhaseConfigType, ResponseWidgetType } from '$lib/config/schema';
@@ -107,6 +110,23 @@
 	// response has been saved (only reachable when allowMultipleResponses=true).
 	// Both the gatekeeper render and handleNo branch on this — engage's "No"
 	// writes a skip row, continue's "No" just advances ("no more to add").
+	// Prefetch the next video so it starts loading while the participant is on the current one.
+	// Works for both regular and review phases; restricted to video stimuli only.
+	let nextVideoUrl = $derived.by(() => {
+		if (config?.stimuli?.type !== 'video') return null;
+		const nextItem = items[responseStore.currentIndex + 1];
+		if (!nextItem) return null;
+		let nextStimulusItem: StimulusItemType | undefined;
+		if (isReviewPhase) {
+			const nextResp = nextItem as ResponseRecord;
+			nextStimulusItem = config.stimuli.items.find(s => s.id === nextResp.stimulus_id);
+		} else {
+			nextStimulusItem = nextItem as StimulusItemType;
+		}
+		if (!nextStimulusItem || !config.stimuli) return null;
+		return getStimulusVideoUrl(nextStimulusItem, config.stimuli) || null;
+	});
+
 	let gateMode = $derived<'engage' | 'continue'>(
 		(responseStore.byStimulus.get(currentItemId)?.length ?? 0) > 0 ? 'continue' : 'engage'
 	);
@@ -127,6 +147,7 @@
 	let breakCountdown = $state(0);
 	let breakTimerInterval: ReturnType<typeof setInterval> | undefined = undefined;
 	let saving = $state(false);
+	let gatekeeperClicked = $state<'yes' | 'no' | null>(null);
 	let responsesLoaded = $state(false);
 	let message = $state<{ type: 'success' | 'error'; text: string } | null>(null);
 	let showCompletionModal = $state(false);
@@ -200,6 +221,13 @@
 		}
 	});
 
+	// Clear gatekeeper click feedback whenever the current item changes (covers
+	// both the sync `continue` path and the async `engage` path in handleNo).
+	$effect(() => {
+		currentItemId;
+		gatekeeperClicked = null;
+	});
+
 	function resetForCurrentItem() {
 		const defaults: Record<string, string> = {};
 		for (const w of activeWidgets) {
@@ -239,9 +267,12 @@
 		checkCompletion();
 	}
 
-	function handleYes() {
+	async function handleYes() {
+		gatekeeperClicked = 'yes';
+		await tick();
 		showGatekeeper = false;
 		showWidgets = true;
+		gatekeeperClicked = null;
 	}
 
 	function handleAudioReady(widgetId: string, blob: Blob | null) {
@@ -262,6 +293,9 @@
 		// (first encounter), "No" writes a skip row with JSON null per widget so
 		// the dataset records "this stimulus was shown but the participant
 		// declined to engage."
+		gatekeeperClicked = 'no';
+		await tick(); // flush so the "…" renders before any sync or async work
+
 		if (gateMode === 'continue') {
 			advanceToNext();
 			return;
@@ -309,6 +343,10 @@
 				const [start, end] = (widgetValues[w.id] || '').split(',');
 				if (!start || !end) {
 					message = { type: 'error', text: i18n.platform('survey.fill_in_required', { field: i18n.localized(w.label, w.id) }) };
+					return;
+				}
+				if (parseFloat(start) >= parseFloat(end)) {
+					message = { type: 'error', text: i18n.platform('timestamps.order_error') };
 					return;
 				}
 			} else if (!String(widgetValues[w.id] ?? '').trim()) {
@@ -626,10 +664,13 @@
 	let navItems = $derived(getNavItems());
 	let currentResponses = $derived(responseStore.byStimulus.get(currentItemId) ?? []);
 	let completedCount = $derived(responseStore.completedStimuli.size);
+	// Map from widget id → widget type for use in the saved-responses display.
+	let widgetTypeMap = $derived(new Map(activeWidgets.map(w => [w.id, w.type])));
 </script>
 
 <svelte:head>
 	<title>{data.experiment ? i18n.localized(data.experiment.config.metadata.title) : (config ? i18n.localized(config.metadata.title) : 'Survey')}</title>
+	{#if nextVideoUrl}<link rel="prefetch" href={nextVideoUrl} />{/if}
 </svelte:head>
 
 <Header onLogout={handleLogout} />
@@ -644,6 +685,18 @@
 		<!-- Phase title (for review phases) -->
 		{#if isReviewPhase && phase.title}
 			<h2 class="text-lg font-semibold mb-2">{i18n.localized(phase.title)}</h2>
+		{/if}
+
+		<!-- Phase-complete banner (shown after modal is dismissed via "stay on page") -->
+		{#if completionModalShown && !showCompletionModal}
+			<button
+				type="button"
+				onclick={() => { showCompletionModal = true; }}
+				class="w-full mb-3 flex items-center justify-between bg-indigo-50 border border-indigo-200 rounded px-3 py-2 text-sm cursor-pointer hover:bg-indigo-100"
+			>
+				<span class="text-indigo-700 font-medium">{i18n.platform('survey.completion_title')}</span>
+				<span class="text-indigo-600">{i18n.platform('survey.next_phase')} →</span>
+			</button>
 		{/if}
 
 		<!-- Progress -->
@@ -677,7 +730,7 @@
 		</div>
 
 		<!-- Item navigation (hidden when revisiting is disabled) -->
-		{#if isReviewPhase || phase.allowRevisit !== false}
+		{#if isReviewPhase ? (phase.reviewConfig?.allowNavigation === true) : (phase.allowRevisit !== false)}
 			<StimulusNav
 				items={navItems as StimulusItemType[]}
 				activeId={currentItemId}
@@ -694,7 +747,14 @@
 					<div class="mb-1 text-gray-600">
 						{#each Object.entries(resp.response_data) as [key, val]}
 							{#if key !== '_timestamp' && val !== 'null' && val !== null}
-								<span class="mr-3"><strong>{key}:</strong> {val}</span>
+								<span class="mr-3">
+									<strong>{key}:</strong>
+									{#if widgetTypeMap.get(key) === 'audio-recording' && typeof val === 'string'}
+										<audio src="{PUBLIC_SUPABASE_URL}/storage/v1/object/public/experiments/{val}" controls class="inline h-8 w-48 align-middle ml-1"></audio>
+									{:else}
+										{val}
+									{/if}
+								</span>
 							{/if}
 						{/each}
 					</div>
@@ -717,19 +777,19 @@
 					<div class="flex gap-4 justify-center">
 						<button
 							id="gatekeeper-yes"
-							class="px-6 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors cursor-pointer"
+							class="px-6 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors cursor-pointer disabled:opacity-60"
 							onclick={handleYes}
-							disabled={saving}
+							disabled={saving || gatekeeperClicked !== null}
 						>
-							{i18n.localized(gatePrompt.yesLabel, i18n.platform('common.yes'))}
+							{gatekeeperClicked === 'yes' ? '…' : i18n.localized(gatePrompt.yesLabel, i18n.platform('common.yes'))}
 						</button>
 						<button
 							id="gatekeeper-no"
-							class="px-6 py-2 bg-gray-400 text-white rounded hover:bg-gray-500 transition-colors cursor-pointer"
+							class="px-6 py-2 bg-gray-400 text-white rounded hover:bg-gray-500 transition-colors cursor-pointer disabled:opacity-60"
 							onclick={handleNo}
-							disabled={saving}
+							disabled={saving || gatekeeperClicked !== null}
 						>
-							{i18n.localized(gatePrompt.noLabel, i18n.platform('common.no'))}
+							{gatekeeperClicked === 'no' ? '…' : i18n.localized(gatePrompt.noLabel, i18n.platform('common.no'))}
 						</button>
 					</div>
 				</div>
@@ -769,7 +829,14 @@
 					<div class="mb-1 text-green-700">
 						{#each Object.entries(resp.response_data) as [key, val]}
 							{#if key !== '_timestamp' && val !== 'null' && val !== null}
-								<span class="mr-3"><strong>{key}:</strong> {val}</span>
+								<span class="mr-3">
+									<strong>{key}:</strong>
+									{#if widgetTypeMap.get(key) === 'audio-recording' && typeof val === 'string'}
+										<audio src="{PUBLIC_SUPABASE_URL}/storage/v1/object/public/experiments/{val}" controls class="inline h-8 w-48 align-middle ml-1"></audio>
+									{:else}
+										{val}
+									{/if}
+								</span>
 							{/if}
 						{/each}
 					</div>

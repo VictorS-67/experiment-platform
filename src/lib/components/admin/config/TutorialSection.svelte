@@ -38,6 +38,19 @@
 	function allTutorialSelectors() {
 		return [...staticTutorialTargets, ...widgetTutorialTargets].map((t) => t.selector);
 	}
+
+	function moveStepUp(index: number) {
+		if (!config.tutorial || index <= 0) return;
+		const s = config.tutorial.steps;
+		[s[index - 1], s[index]] = [s[index], s[index - 1]];
+	}
+
+	function moveStepDown(index: number) {
+		if (!config.tutorial) return;
+		const s = config.tutorial.steps;
+		if (index >= s.length - 1) return;
+		[s[index], s[index + 1]] = [s[index + 1], s[index]];
+	}
 </script>
 
 {#if !config.tutorial}
@@ -90,7 +103,7 @@
 			<span class="text-sm text-gray-700">Allow participants to skip the tutorial</span>
 		</label>
 
-		<div class="border border-gray-200 rounded p-3 space-y-3">
+		<div class="border-2 border-gray-300 rounded p-3 space-y-3">
 			<div class="flex items-center justify-between">
 				<h4 class="text-sm font-medium text-gray-600">Introduction page</h4>
 				{#if config.tutorial.introduction}
@@ -121,11 +134,15 @@
 		<h4 class="text-sm font-medium text-gray-600 pt-2">Steps ({config.tutorial.steps.length})</h4>
 		{#each config.tutorial.steps as step, si}
 			{@const isCustomTarget = !!step.targetSelector && !allTutorialSelectors().includes(step.targetSelector)}
-			<div class="border border-gray-200 rounded p-3 space-y-2">
+			<div class="border-2 border-gray-300 rounded p-3 space-y-2">
 				<div class="flex items-center justify-between">
 					<span class="text-xs font-mono text-gray-400">Step {si + 1}: {step.id}</span>
-					<button type="button" onclick={() => { config.tutorial!.steps.splice(si, 1); }}
-						class="text-xs text-red-500 hover:text-red-700 cursor-pointer">Remove</button>
+					<div class="flex items-center gap-2">
+						<button type="button" onclick={() => moveStepUp(si)} disabled={si === 0} class="text-xs text-gray-400 hover:text-gray-600 disabled:opacity-30 cursor-pointer disabled:cursor-default" title="Move up">↑</button>
+						<button type="button" onclick={() => moveStepDown(si)} disabled={si === config.tutorial!.steps.length - 1} class="text-xs text-gray-400 hover:text-gray-600 disabled:opacity-30 cursor-pointer disabled:cursor-default" title="Move down">↓</button>
+						<button type="button" onclick={() => { config.tutorial!.steps.splice(si, 1); }}
+							class="text-xs text-red-500 hover:text-red-700 cursor-pointer">Remove</button>
+					</div>
 				</div>
 				<div class="grid grid-cols-2 gap-2">
 					<Field label="ID">
@@ -207,6 +224,14 @@
 						</Field>
 					{/if}
 				</div>
+
+				{#if step.validation && step.validation.type !== 'none'}
+					<label class="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
+						<input type="checkbox" checked={step.autoAdvance ?? false}
+							onchange={(e) => update(['tutorial', 'steps', String(si), 'autoAdvance'], e.currentTarget.checked || undefined)} />
+						Auto-advance when action is completed
+					</label>
+				{/if}
 
 				<LocalizedInput label="Title" value={step.title} {languages} onchange={(v) => update(['tutorial', 'steps', String(si), 'title'], v)} />
 				<LocalizedInput label="Body" value={step.body} {languages} multiline onchange={(v) => update(['tutorial', 'steps', String(si), 'body'], v)} />

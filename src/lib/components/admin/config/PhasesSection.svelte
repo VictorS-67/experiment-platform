@@ -36,7 +36,7 @@
 		const newWidget = { id: newId, type: 'text' as const, label: Object.fromEntries(languages.map((l) => [l, ''])), required: true };
 		if (config.phases[phaseIndex].type === 'review') {
 			if (!config.phases[phaseIndex].reviewConfig) {
-				config.phases[phaseIndex].reviewConfig = { sourcePhase: '', filterEmpty: true, replayMode: 'segment', responseWidgets: [] };
+				config.phases[phaseIndex].reviewConfig = { sourcePhase: '', filterEmpty: true, replayMode: 'segment', allowNavigation: false, responseWidgets: [] };
 			}
 			config.phases[phaseIndex].reviewConfig!.responseWidgets.push(newWidget);
 		} else {
@@ -50,6 +50,23 @@
 		} else {
 			config.phases[phaseIndex].responseWidgets.splice(widgetIndex, 1);
 		}
+	}
+
+	function moveWidgetUp(phaseIndex: number, widgetIndex: number) {
+		if (widgetIndex <= 0) return;
+		const arr = config.phases[phaseIndex].type === 'review'
+			? config.phases[phaseIndex].reviewConfig?.responseWidgets
+			: config.phases[phaseIndex].responseWidgets;
+		if (!arr) return;
+		[arr[widgetIndex - 1], arr[widgetIndex]] = [arr[widgetIndex], arr[widgetIndex - 1]];
+	}
+
+	function moveWidgetDown(phaseIndex: number, widgetIndex: number) {
+		const arr = config.phases[phaseIndex].type === 'review'
+			? config.phases[phaseIndex].reviewConfig?.responseWidgets
+			: config.phases[phaseIndex].responseWidgets;
+		if (!arr || widgetIndex >= arr.length - 1) return;
+		[arr[widgetIndex], arr[widgetIndex + 1]] = [arr[widgetIndex + 1], arr[widgetIndex]];
 	}
 
 	function widgetPath(pi: number, wi: number, field: string): string[] {
@@ -118,7 +135,7 @@
 
 	{#each config.phases as phase, pi}
 		{@const phaseWidgets = phase.type === 'review' ? (phase.reviewConfig?.responseWidgets ?? []) : phase.responseWidgets}
-		<div class="border border-gray-200 rounded-lg overflow-hidden">
+		<div class="border-2 border-gray-300 rounded-lg overflow-hidden">
 			<div class="bg-gray-50 px-4 py-3 flex items-center justify-between">
 				<span class="text-sm font-medium text-gray-700">Phase {pi + 1}: <span class="font-mono text-gray-500">{phase.slug}</span></span>
 				<button
@@ -275,7 +292,7 @@
 									value={phase.reviewConfig?.sourcePhase ?? ''}
 									onchange={(e) => {
 										if (!config.phases[pi].reviewConfig) {
-											config.phases[pi].reviewConfig = { sourcePhase: '', filterEmpty: true, replayMode: 'segment', responseWidgets: [] };
+											config.phases[pi].reviewConfig = { sourcePhase: '', filterEmpty: true, replayMode: 'segment', allowNavigation: false, responseWidgets: [] };
 										}
 										config.phases[pi].reviewConfig!.sourcePhase = e.currentTarget.value;
 									}}
@@ -291,7 +308,7 @@
 								<input type="checkbox" checked={phase.reviewConfig?.filterEmpty ?? true}
 									onchange={(e) => {
 										if (!config.phases[pi].reviewConfig) {
-											config.phases[pi].reviewConfig = { sourcePhase: '', filterEmpty: true, replayMode: 'segment', responseWidgets: [] };
+											config.phases[pi].reviewConfig = { sourcePhase: '', filterEmpty: true, replayMode: 'segment', allowNavigation: false, responseWidgets: [] };
 										}
 										config.phases[pi].reviewConfig!.filterEmpty = e.currentTarget.checked;
 									}} />
@@ -304,7 +321,7 @@
 									value={phase.reviewConfig?.replayMode ?? 'segment'}
 									onchange={(e) => {
 										if (!config.phases[pi].reviewConfig) {
-											config.phases[pi].reviewConfig = { sourcePhase: '', filterEmpty: true, replayMode: 'segment', responseWidgets: [] };
+											config.phases[pi].reviewConfig = { sourcePhase: '', filterEmpty: true, replayMode: 'segment', allowNavigation: false, responseWidgets: [] };
 										}
 										config.phases[pi].reviewConfig!.replayMode = e.currentTarget.value as 'segment' | 'full-highlight';
 									}}
@@ -315,6 +332,16 @@
 								</select>
 							</Field>
 						</div>
+						<label class="flex items-center gap-2 text-sm mt-2">
+							<input type="checkbox" checked={phase.reviewConfig?.allowNavigation ?? false}
+								onchange={(e) => {
+									if (!config.phases[pi].reviewConfig) {
+										config.phases[pi].reviewConfig = { sourcePhase: '', filterEmpty: true, replayMode: 'segment', allowNavigation: false, responseWidgets: [] };
+									}
+									config.phases[pi].reviewConfig!.allowNavigation = e.currentTarget.checked;
+								}} />
+							Allow free navigation (participants can jump between items)
+						</label>
 					</div>
 				{/if}
 
@@ -326,10 +353,14 @@
 					</div>
 
 					{#each phaseWidgets as widget, wi}
-						<div class="border border-gray-200 rounded p-3 mb-2 space-y-2">
+						<div class="border-2 border-gray-300 rounded p-3 mb-2 space-y-2">
 							<div class="flex items-center justify-between">
 								<span class="text-xs font-mono text-gray-400">{widget.id}</span>
-								<button type="button" onclick={() => removeWidget(pi, wi)} class="text-xs text-red-500 hover:text-red-700 cursor-pointer">Remove</button>
+								<div class="flex items-center gap-2">
+									<button type="button" onclick={() => moveWidgetUp(pi, wi)} disabled={wi === 0} class="text-xs text-gray-400 hover:text-gray-600 disabled:opacity-30 cursor-pointer disabled:cursor-default" title="Move up">↑</button>
+									<button type="button" onclick={() => moveWidgetDown(pi, wi)} disabled={wi === phaseWidgets.length - 1} class="text-xs text-gray-400 hover:text-gray-600 disabled:opacity-30 cursor-pointer disabled:cursor-default" title="Move down">↓</button>
+									<button type="button" onclick={() => removeWidget(pi, wi)} class="text-xs text-red-500 hover:text-red-700 cursor-pointer">Remove</button>
+								</div>
 							</div>
 							<div class="grid grid-cols-3 gap-2">
 								<Field label="ID">
@@ -595,7 +626,7 @@
 						{/if}
 						{#each phase.skipRules ?? [] as rule, ri}
 							{@const rulePath = ['phases', String(pi), 'skipRules', String(ri)]}
-							<div class="border border-gray-200 rounded p-2 mb-2 space-y-2">
+							<div class="border-2 border-gray-300 rounded p-2 mb-2 space-y-2">
 								<div class="flex items-center justify-between">
 									<span class="text-xs text-gray-400">Rule {ri + 1}</span>
 									<button type="button" onclick={() => removeSkipRule(pi, ri)} class="text-xs text-red-500 hover:text-red-700 cursor-pointer">Remove</button>
@@ -663,7 +694,7 @@
 					{/if}
 					{#each phase.branchRules ?? [] as rule, ri}
 						{@const brPath = ['phases', String(pi), 'branchRules', String(ri)]}
-						<div class="border border-gray-200 rounded p-2 mb-2 space-y-2">
+						<div class="border-2 border-gray-300 rounded p-2 mb-2 space-y-2">
 							<div class="flex items-center justify-between">
 								<span class="text-xs text-gray-400">Rule {ri + 1}</span>
 								<button type="button" onclick={() => removeBranchRule(pi, ri)} class="text-xs text-red-500 hover:text-red-700 cursor-pointer">Remove</button>

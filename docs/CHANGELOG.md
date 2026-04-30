@@ -160,3 +160,25 @@
 
 ### Coding philosophy
 - Added "Root-cause fixes, not band-aids" to `CLAUDE.md` as the project's stated coding principle
+
+## Bug Fixes & UX Improvements (2026-04-30)
+
+### Participant-facing fixes
+1. **Timestamp order validation** — Save blocked when `start >= end` in a `timestamp-range` widget; inline red warning shown in `WidgetRenderer.svelte` before save attempt. i18n key `timestamps.order_error` added (EN + JA).
+2. **Gatekeeper click feedback** — Yes/No buttons now show `…` immediately on click using `await tick()` to force a Svelte DOM flush before any sync/async work. Fixes the `gateMode === 'continue'` case where `saving` was set and cleared in one synchronous pass (Svelte batched the update and no visual feedback appeared).
+3. **Video prefetch** — `VideoPlayer.svelte` exports `getStimulusVideoUrl()` from a module-level script block. The phase page derives `nextVideoUrl` for the upcoming item (both regular and review phases) and injects `<link rel="prefetch">` in `<svelte:head>` to reduce inter-stimulus latency.
+4. **Audio responses displayed as players** — Saved source-phase audio responses (paths matching `audio/…webm`) in `ReviewItemDisplay.svelte` now render as `<audio controls>` players instead of raw storage paths. Same fix applied to both saved-response blocks in `+page.svelte`.
+5. **Completion "stay on page" dead-end** — After dismissing the completion modal with "Stay on page", a persistent indigo banner now appears above the progress bar. Clicking it re-opens the modal with all navigation options.
+6. **Review phase save rejecting all widgets** — `save/+server.ts` was using `phase.responseWidgets ?? phase.reviewConfig?.responseWidgets`. Because Zod defaults `responseWidgets` to `[]`, the nullish coalescing never fell through to `reviewConfig.responseWidgets`, making every widget ID unknown. Fixed by branching on `phase.type === 'review'`.
+
+### Schema additions
+- `TutorialStep.autoAdvance: boolean?` — when `true`, the overlay auto-advances ~400ms after the required validation action completes (click/input/play). Admin checkbox added in the tutorial step editor.
+- `ReviewConfig.allowNavigation: boolean (default false)` — controls whether participants can freely jump between review items via `StimulusNav`. Defaults to sequential-only (previously unconfigurable and always enabled). Admin toggle added.
+
+### Admin editor
+- **Thicker borders** — All phase/widget/field/step cards changed from `border border-gray-200` to `border-2 border-gray-300` for visual clarity.
+- **Reordering** — ↑/↓ buttons added to registration fields, tutorial steps, and response widgets in all phases. Buttons are disabled at array boundaries.
+
+### Infrastructure
+- **`scripts/sync-remote-to-local.js`** — New script: copies all data from remote Supabase (experiments, participants, responses, config versions, file uploads, pending invites) to local Supabase. Creates a fresh local admin user (`debug@local.dev`) with owner access to all experiments. Optional `--storage` flag copies storage bucket files. Uses `--admin-email` / `--admin-password` flags to customise credentials. Bucket is always set to `public: true` even if it pre-existed.
+- **CSP local-dev fix** — `svelte.config.js` now uses Vite's `loadEnv` to read the mode-specific env file at startup. Previously `process.env.PUBLIC_SUPABASE_URL` was evaluated before Vite processed `.env.local-db`, so `--mode local-db` didn't whitelist `http://127.0.0.1:54321` in `media-src`/`connect-src`.

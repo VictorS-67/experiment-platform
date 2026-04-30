@@ -101,6 +101,9 @@
 		{@const parts = value.split(',') }
 		{@const startTime = parts[0] || i18n.platform('timestamps.not_set')}
 		{@const endTime = parts[1] || i18n.platform('timestamps.not_set')}
+		{@const tsStart = parseFloat(parts[0])}
+		{@const tsEnd = parseFloat(parts[1])}
+		{@const orderError = !isNaN(tsStart) && !isNaN(tsEnd) && tsStart >= tsEnd}
 		<div class="flex gap-4 items-center">
 			<div class="flex-1">
 				<button
@@ -137,6 +140,9 @@
 				<p class="text-xs text-gray-500 mt-1 text-center">{endTime}</p>
 			</div>
 		</div>
+		{#if orderError}
+			<p class="text-xs text-red-600 mt-1">{i18n.platform('timestamps.order_error')}</p>
+		{/if}
 		{#if widget.config?.timestampReviewMode && onReplayRequest}
 			{@const s = parseFloat(parts[0])}
 			{@const e = parseFloat(parts[1])}

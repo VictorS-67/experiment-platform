@@ -76,11 +76,16 @@
 			return;
 		}
 
+		const markValidated = () => {
+			stepValidated = true;
+			updateNextButtonState();
+			if (stepConfig.autoAdvance) setTimeout(() => advance(), 400);
+		};
+
 		if (validation.type === 'click') {
 			const handler = () => {
 				if (stepValidated) return;
-				stepValidated = true;
-				updateNextButtonState();
+				markValidated();
 			};
 			target.addEventListener('click', handler);
 			// Native video/audio controls (play button, seek bar) live in the browser's shadow UI
@@ -102,10 +107,7 @@
 			const handler = () => {
 				if (stepValidated) return;
 				const el = target as HTMLInputElement | HTMLTextAreaElement;
-				if (el.value?.trim().length > 0) {
-					stepValidated = true;
-					updateNextButtonState();
-				}
+				if (el.value?.trim().length > 0) markValidated();
 			};
 			target.addEventListener('input', handler);
 			validationCleanup = () => target.removeEventListener('input', handler);
@@ -113,8 +115,7 @@
 			const media = target.querySelector('video, audio') ?? target;
 			const handler = () => {
 				if (stepValidated) return;
-				stepValidated = true;
-				updateNextButtonState();
+				markValidated();
 			};
 			media.addEventListener('play', handler);
 			validationCleanup = () => media.removeEventListener('play', handler);

@@ -28,6 +28,8 @@ frame-ancestors 'none'
 
 `unsafe-inline` was removed from both `script-src` and `style-src`. `style-src-attr 'unsafe-inline'` is the narrow exception kept for Tailwind v4's per-element inline styles. Inline event handlers (`onclick=""`) and inline `<style>` blocks are blocked.
 
+**`{SUPABASE_URL}` resolution**: `svelte.config.js` uses Vite's `loadEnv(mode, cwd)` to read the active env file before the config object is constructed. This means `--mode local-db` correctly whitelists `http://127.0.0.1:54321` in `media-src` and `connect-src` for local development. Without `loadEnv`, `process.env.PUBLIC_SUPABASE_URL` is evaluated before Vite processes mode-specific env files, so the local URL was never included and the browser blocked all storage requests.
+
 ## File Upload Validation
 
 - **Allowed types**: `audio/webm`, `audio/ogg`, `audio/mp4`, `audio/mpeg`

@@ -35,7 +35,8 @@ ExperimentConfig
 │   ├── steps: TutorialStep[]
 │   │   ├── id, targetSelector, title, body: LocalizedString
 │   │   ├── instruction: LocalizedString?, position: top|bottom|left|right|center
-│   │   └── validation: { type: click|input|play|none, target?: string }?
+│   │   ├── validation: { type: click|input|play|none, target?: string }?
+│   │   └── autoAdvance: boolean?       # If true, overlay advances ~400ms after validation completes
 │   ├── completion: { title, body, buttonText }
 │   └── sampleStimuliIds: string[]
 ├── phases: PhaseConfig[] (min 1)
@@ -50,6 +51,8 @@ ExperimentConfig
 │   ├── reviewConfig?                           # Required for review phases
 │   │   ├── sourcePhase: string
 │   │   ├── filterEmpty: boolean (default true)
+│   │   ├── replayMode: "segment" | "full-highlight" (default "segment")
+│   │   ├── allowNavigation: boolean (default false)   # If false, StimulusNav is hidden; sequential only
 │   │   └── responseWidgets: ResponseWidget[]
 │   ├── stimulusOrder: "sequential" | "random" | "random-per-participant"
 │   ├── allowRevisit: boolean (default true)

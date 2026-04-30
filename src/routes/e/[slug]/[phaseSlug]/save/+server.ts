@@ -50,7 +50,10 @@ export const POST: RequestHandler = async ({ request, locals, params }) => {
 			error(400, 'Invalid stimulus');
 		}
 	}
-	const phaseWidgets = phase.responseWidgets ?? phase.reviewConfig?.responseWidgets ?? [];
+	const phaseWidgets =
+		phase.type === 'review'
+			? (phase.reviewConfig?.responseWidgets ?? [])
+			: (phase.responseWidgets ?? []);
 	const widgetIds = new Set(phaseWidgets.map((w) => w.id));
 	for (const key of Object.keys(responseData as Record<string, unknown>)) {
 		if (!widgetIds.has(key)) {

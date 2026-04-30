@@ -4,6 +4,7 @@
 	import StimulusRenderer from '$lib/components/stimuli/StimulusRenderer.svelte';
 	import { createReplayController } from '$lib/utils/replay';
 	import { i18n } from '$lib/i18n/index.svelte';
+	import { PUBLIC_SUPABASE_URL } from '$env/static/public';
 
 	let {
 		sourceResponse,
@@ -22,10 +23,11 @@
 	let highlightActive = $state(false);
 	const controller = createReplayController();
 
-	// Parse response data into timestamps (values matching "number-number") and regular key-values
+	// Parse response data into timestamps, audio recordings, and regular key-values
 	let parsed = $derived.by(() => {
 		const data = sourceResponse.response_data;
 		const timestamps: { widgetId: string; start: number; end: number }[] = [];
+		const audios: { key: string; path: string }[] = [];
 		const regular: { key: string; val: unknown }[] = [];
 
 		for (const [key, val] of Object.entries(data)) {
@@ -33,11 +35,13 @@
 			if (typeof val === 'string' && /^\d+(\.\d+)?-\d+(\.\d+)?$/.test(val)) {
 				const [s, e] = val.split('-');
 				timestamps.push({ widgetId: key, start: parseFloat(s), end: parseFloat(e) });
+			} else if (typeof val === 'string' && /^audio\/.+\.(webm|mp3|ogg|wav|m4a)$/i.test(val)) {
+				audios.push({ key, path: val });
 			} else {
 				regular.push({ key, val });
 			}
 		}
-		return { timestamps, regular };
+		return { timestamps, audios, regular };
 	});
 
 	function formatTime(secs: number): string {
@@ -69,6 +73,12 @@
 	{#each parsed.regular as { key, val }}
 		<div class="text-sm text-blue-700 mb-1">
 			<strong>{key}:</strong> {val}
+		</div>
+	{/each}
+	{#each parsed.audios as { key, path }}
+		<div class="text-sm text-blue-700 mb-1">
+			<strong>{key}:</strong>
+			<audio src="{PUBLIC_SUPABASE_URL}/storage/v1/object/public/experiments/{path}" controls class="inline h-8 w-48 align-middle ml-1"></audio>
 		</div>
 	{/each}
 	{#each parsed.timestamps as { widgetId, start, end }}

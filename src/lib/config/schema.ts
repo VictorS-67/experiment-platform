@@ -130,7 +130,8 @@ const TutorialStep = z.object({
 	body: LocalizedString,
 	instruction: LocalizedString.optional(),
 	position: z.enum(['top', 'bottom', 'left', 'right', 'center']).default('bottom'),
-	validation: TutorialStepValidation.optional()
+	validation: TutorialStepValidation.optional(),
+	autoAdvance: z.boolean().optional()
 });
 
 const TutorialConfig = z.object({
@@ -265,6 +266,7 @@ const ReviewConfig = z.object({
 	sourcePhase: z.string(),
 	filterEmpty: z.boolean().default(true),
 	replayMode: z.enum(['segment', 'full-highlight']).default('segment'),
+	allowNavigation: z.boolean().default(false),
 	responseWidgets: z.array(ResponseWidget)
 });
 

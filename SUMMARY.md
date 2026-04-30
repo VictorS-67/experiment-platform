@@ -2,8 +2,8 @@
 
 > **Purpose**: This document is written for AI agents. It contains everything needed to understand, navigate, and continue development on this project without prior context.
 >
-> **Last updated**: 2026-04-27
-> **Build status**: 0 type errors, production build succeeds. 129 Vitest unit tests passing; 83 Playwright E2E tests passing (against local Supabase).
+> **Last updated**: 2026-04-30
+> **Build status**: 0 type errors, production build succeeds. 150 Vitest unit tests passing; 83 Playwright E2E tests passing (against local Supabase).
 > **Deployed**: Vercel (using `@sveltejs/adapter-vercel`)
 
 ---
@@ -182,7 +182,8 @@ ExperimentConfig
 │   ├── steps: TutorialStep[]
 │   │   ├── id, targetSelector (CSS selector), title, body: LocalizedString
 │   │   ├── instruction: LocalizedString?, position: top|bottom|left|right|center
-│   │   └── validation: { type: click|input|play|none, target?: string }?
+│   │   ├── validation: { type: click|input|play|none, target?: string }?
+│   │   └── autoAdvance: boolean?    # Auto-advances overlay ~400ms after validation action completes
 │   ├── completion: { title, body, buttonText }
 │   └── sampleStimuliIds: string[]
 ├── phases: PhaseConfig[] (min 1)
@@ -190,13 +191,15 @@ ExperimentConfig
 │   ├── title: LocalizedString
 │   ├── introduction: { title, body }?
 │   ├── gatekeeperQuestion?
-│   │   ├── text, yesLabel, noLabel: LocalizedString
-│   │   ├── noResponseValue: string (default "null")
+│   │   ├── initial: { text, yesLabel, noLabel: LocalizedString }   # first encounter (no prior response)
+│   │   ├── subsequent?: { text, yesLabel, noLabel: LocalizedString } # re-prompt after a real response
 │   │   └── skipToNext: boolean (default true)
 │   ├── responseWidgets: ResponseWidget[]       # For stimulus-response phases
 │   ├── reviewConfig?                           # For review phases
 │   │   ├── sourcePhase: string                 # References another phase's id
 │   │   ├── filterEmpty: boolean (default true)
+│   │   ├── replayMode: "segment" | "full-highlight" (default "segment")
+│   │   ├── allowNavigation: boolean (default false)   # false = sequential only, StimulusNav hidden
 │   │   └── responseWidgets: ResponseWidget[]   # Widgets specific to the review phase
 │   ├── stimulusOrder: "sequential" | "random" | "random-per-participant"
 │   ├── allowRevisit: boolean (default true)
@@ -282,6 +285,7 @@ experiment-platform/
 ├── configs/                              # Local experiment JSON configs (gitignored)
 ├── scripts/
 │   ├── seed.js                           # Upsert config JSON into experiments table
+│   ├── sync-remote-to-local.js           # Copy all remote Supabase data → local instance (run after `supabase start`)
 │   ├── upload-test-videos.js             # Upload first 3 videos to Supabase Storage
 │   └── upload-all-videos.js              # Upload all 144 videos with progress bar
 ├── supabase/migrations/                  # 8 SQL migration files (see section 5)
@@ -331,10 +335,10 @@ experiment-platform/
 │   │       │   ├── FieldRenderer.svelte      # Renders one field by type
 │   │       │   └── RegistrationForm.svelte   # Dynamic form with conditional field visibility
 │   │       ├── review/
-│   │       │   └── ReviewItemDisplay.svelte  # Source response display + timestamp pair detection + replay button
+│   │       │   └── ReviewItemDisplay.svelte  # Source response display + timestamp pair detection + audio path detection + replay button
 │   │       ├── stimuli/
 │   │       │   ├── StimulusRenderer.svelte   # Dispatches to VideoPlayer/img/audio/text by type
-│   │       │   └── VideoPlayer.svelte        # Constructs Supabase Storage URL, renders <video>
+│   │       │   └── VideoPlayer.svelte        # Constructs Supabase Storage URL, renders <video>; exports getStimulusVideoUrl() for use by the phase page
 │   │       ├── tutorial/
 │   │       │   └── TutorialOverlay.svelte    # Driver.js integration with step validation
 │   │       └── widgets/

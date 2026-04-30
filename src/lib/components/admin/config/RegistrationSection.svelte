@@ -22,6 +22,18 @@
 		config.registration.fields.splice(index, 1);
 	}
 
+	function moveFieldUp(index: number) {
+		if (index <= 0) return;
+		const f = config.registration.fields;
+		[f[index - 1], f[index]] = [f[index], f[index - 1]];
+	}
+
+	function moveFieldDown(index: number) {
+		const f = config.registration.fields;
+		if (index >= f.length - 1) return;
+		[f[index], f[index + 1]] = [f[index + 1], f[index]];
+	}
+
 	function addFieldOption(fi: number) {
 		const field = config.registration.fields[fi];
 		if (!field.options) field.options = [];
@@ -47,10 +59,14 @@
 	</div>
 
 	{#each config.registration.fields as field, i}
-		<div class="border border-gray-200 rounded p-4 space-y-3">
+		<div class="border-2 border-gray-300 rounded p-4 space-y-3">
 			<div class="flex items-center justify-between">
 				<span class="text-xs font-mono text-gray-400">{field.id}</span>
-				<button type="button" onclick={() => removeRegistrationField(i)} class="text-xs text-red-500 hover:text-red-700 cursor-pointer">Remove</button>
+				<div class="flex items-center gap-2">
+					<button type="button" onclick={() => moveFieldUp(i)} disabled={i === 0} class="text-xs text-gray-400 hover:text-gray-600 disabled:opacity-30 cursor-pointer disabled:cursor-default" title="Move up">↑</button>
+					<button type="button" onclick={() => moveFieldDown(i)} disabled={i === config.registration.fields.length - 1} class="text-xs text-gray-400 hover:text-gray-600 disabled:opacity-30 cursor-pointer disabled:cursor-default" title="Move down">↓</button>
+					<button type="button" onclick={() => removeRegistrationField(i)} class="text-xs text-red-500 hover:text-red-700 cursor-pointer">Remove</button>
+				</div>
 			</div>
 			<div class="grid grid-cols-3 gap-3">
 				<Field label="ID">

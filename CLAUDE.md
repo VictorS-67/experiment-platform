@@ -133,6 +133,18 @@ The `select-or-other` registration field stores a **single string** in `registra
 ### Skip rows write JSON null (not string)
 Since the gatekeeper "No" handler fix, new skip rows store `null` (JSON null) per widget key — e.g. `{rating: null, comment: null}`. Legacy rows written before the fix may contain a string sentinel (e.g. `"null"`). Use `scripts/migrate-skip-rows.ts` to normalize legacy rows. When reading skip rows in analysis code, filter by `value IS NULL OR value = '<sentinel>'` until the normalization migration has run.
 
+### Review phase widget lookup — branch on `phase.type`, not nullish coalescing
+`phase.responseWidgets` is always `[]` (Zod default) even for review phases. Using `phase.responseWidgets ?? phase.reviewConfig?.responseWidgets` never reaches `reviewConfig.responseWidgets` because `[]` is not `null`/`undefined`. Always branch explicitly: `phase.type === 'review' ? phase.reviewConfig?.responseWidgets ?? [] : phase.responseWidgets ?? []`.
+
+### `svelte.config.js` CSP and mode-specific env vars
+`svelte.config.js` is evaluated as a Node.js module before Vite processes mode-specific env files. Using `process.env.PUBLIC_SUPABASE_URL` directly only sees the shell environment, not `.env.local-db`. The config uses `loadEnv(mode, cwd)` from `vite` to read the correct env for the active `--mode` flag. If you add new origins to the CSP that depend on env vars, use the same `env` object, not `process.env`.
+
+### Gatekeeper click feedback requires `await tick()`
+In `gateMode === 'continue'`, `handleNo()` is synchronous — setting and clearing `saving` in one pass. Svelte batches those updates and never flushes a DOM frame showing the intermediate state. Always `await tick()` after setting any visual-feedback state (e.g. `gatekeeperClicked`) before doing synchronous work that will immediately clear it.
+
+### Local debugging with `sync-remote-to-local.js`
+`node scripts/sync-remote-to-local.js [--storage]` copies all remote data to local Supabase and creates a local admin (`debug@local.dev` / `Debug1234!`). Run `supabase start` first. The script always sets the `experiments` storage bucket to `public: true` — the bucket may have been created as private in a previous local session.
+
 ## Credentials
 
 - **`.credentials`**: Contains admin login credentials (email + password) for testing the admin dashboard. Read this file when you need to log in or test admin features. It is gitignored — never hardcode or commit these values.

@@ -1,4 +1,14 @@
 import adapter from '@sveltejs/adapter-vercel';
+import { loadEnv } from 'vite';
+
+// svelte.config.js is evaluated before Vite processes mode-specific env files,
+// so process.env won't contain .env.local-db overrides when --mode local-db is
+// used. loadEnv reads the same files Vite would, giving us the correct URL for
+// whitelisting in the CSP regardless of which Supabase instance is active.
+const modeArgIdx = process.argv.indexOf('--mode');
+const mode = modeArgIdx >= 0 ? process.argv[modeArgIdx + 1] : 'development';
+const env = loadEnv(mode, process.cwd(), '');
+const supabaseUrl = env.PUBLIC_SUPABASE_URL ?? process.env.PUBLIC_SUPABASE_URL ?? '';
 
 /** @type {import('@sveltejs/kit').Config} */
 const config = {
@@ -18,8 +28,9 @@ const config = {
 		// safer than the old `style-src 'unsafe-inline'` which also allowed
 		// arbitrary inline <style> blocks.
 		//
-		// PUBLIC_SUPABASE_URL is whitelisted at build time via the env var so
-		// media and XHR can reach the project's storage + REST endpoints.
+		// supabaseUrl is whitelisted so media and XHR can reach the project's
+		// storage + REST endpoints. loadEnv above ensures the correct URL is
+		// used for whichever mode (online vs local-db) the server started with.
 		csp: {
 			mode: 'auto',
 			directives: {
@@ -28,9 +39,9 @@ const config = {
 				'style-src': ['self', 'https://fonts.googleapis.com'],
 				'style-src-attr': ['unsafe-inline'],
 				'font-src': ['self', 'https://fonts.gstatic.com'],
-				'img-src': ['self', 'data:', 'blob:', process.env.PUBLIC_SUPABASE_URL ?? ''],
-				'media-src': ['self', 'blob:', process.env.PUBLIC_SUPABASE_URL ?? ''],
-				'connect-src': ['self', process.env.PUBLIC_SUPABASE_URL ?? ''],
+				'img-src': ['self', 'data:', 'blob:', supabaseUrl],
+				'media-src': ['self', 'blob:', supabaseUrl],
+				'connect-src': ['self', supabaseUrl],
 				'frame-ancestors': ['none']
 			}
 		}
