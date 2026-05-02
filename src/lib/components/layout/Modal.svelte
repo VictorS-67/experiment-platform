@@ -6,7 +6,8 @@
 		title = '',
 		wide = false,
 		onclose,
-		children
+		children,
+		footer
 	}: {
 		show: boolean;
 		title?: string;
@@ -14,6 +15,8 @@
 		wide?: boolean;
 		onclose?: () => void;
 		children: Snippet;
+		/** Optional sticky footer rendered outside the scrollable body. */
+		footer?: Snippet;
 	} = $props();
 
 	let dialogEl: HTMLDivElement | undefined = $state(undefined);
@@ -87,9 +90,18 @@
 	>
 		<div class="modal-content" class:modal-wide={wide}>
 			{#if title}
-				<h2 class="text-xl font-semibold mb-4">{title}</h2>
+				<div class="px-8 pt-8 pb-4 shrink-0">
+					<h2 class="text-xl font-semibold">{title}</h2>
+				</div>
 			{/if}
-			{@render children()}
+			<div class="flex-1 overflow-y-auto px-8 py-6">
+				{@render children()}
+			</div>
+			{#if footer}
+				<div class="shrink-0 border-t border-gray-200 px-8 py-4">
+					{@render footer()}
+				</div>
+			{/if}
 		</div>
 	</div>
 {/if}

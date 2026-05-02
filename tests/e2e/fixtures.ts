@@ -108,3 +108,18 @@ export async function loginAsAdmin(page: Page, ctx: TestContext) {
 	await page.getByRole('button', { name: /sign in/i }).click();
 	await page.waitForURL(/\/admin\/experiments/);
 }
+
+/**
+ * Helper: create a fresh experiment via the admin "New" form and wait for the
+ * detail-page redirect. Returns the slug used (caller can re-derive the id from
+ * `page.url()` if needed). Mirrors the manual flow in real admin onboarding.
+ */
+export async function createTestExperiment(page: Page, slugPrefix: string, title = 'E2E Test'): Promise<string> {
+	await page.goto('/admin/experiments/new');
+	const slug = `${slugPrefix}-${Date.now()}`;
+	await page.getByLabel(/slug/i).fill(slug);
+	await page.getByLabel(/title \(english\)/i).fill(title);
+	await page.getByRole('button', { name: /create/i }).click();
+	await page.waitForURL(/\/admin\/experiments\/[0-9a-f-]+/);
+	return slug;
+}

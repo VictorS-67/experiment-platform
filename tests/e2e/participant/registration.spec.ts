@@ -117,8 +117,14 @@ test.describe('P1 registration', () => {
 	test('P1.6: select-or-other picks known option → stores option value directly', async ({
 		page
 	}) => {
-		// Seed a fresh experiment with a select-or-other field.
+		// Seed a fresh experiment with a select-or-other field. The full-feature
+		// fixture already has a `native_language` field (text, conditionalOn
+		// country=jp) — replace it rather than push a duplicate, because two
+		// fields with the same id would render two inputs both labeled "Native
+		// language" and getByLabel would resolve ambiguously.
 		const cfg = makeFullFeatureConfig(`p16-${Date.now()}`);
+		const fields = cfg.registration.fields as Array<Record<string, unknown>>;
+		cfg.registration.fields = fields.filter((f) => f.id !== 'native_language') as typeof cfg.registration.fields;
 		(cfg.registration.fields as Array<Record<string, unknown>>).push({
 			id: 'native_language',
 			type: 'select-or-other',
@@ -139,7 +145,8 @@ test.describe('P1 registration', () => {
 			await page.getByLabel(/email/i).fill(email);
 			await page.getByRole('button', { name: /continue|submit|next/i }).first().click();
 
-			await page.getByLabel(/age/i).fill('28');
+			// `exact: true` so we don't match "Native lang**uage**" (which contains "age").
+			await page.getByLabel('Age', { exact: true }).fill('28');
 			await page.getByLabel(/country/i).selectOption('us');
 			// Pick a known option — no free-text input should appear.
 			await page.getByLabel(/native language/i).selectOption('english');
@@ -164,6 +171,8 @@ test.describe('P1 registration', () => {
 		page
 	}) => {
 		const cfg = makeFullFeatureConfig(`p17-${Date.now()}`);
+		const fields = cfg.registration.fields as Array<Record<string, unknown>>;
+		cfg.registration.fields = fields.filter((f) => f.id !== 'native_language') as typeof cfg.registration.fields;
 		(cfg.registration.fields as Array<Record<string, unknown>>).push({
 			id: 'native_language',
 			type: 'select-or-other',
@@ -184,7 +193,7 @@ test.describe('P1 registration', () => {
 			await page.getByLabel(/email/i).fill(email);
 			await page.getByRole('button', { name: /continue|submit|next/i }).first().click();
 
-			await page.getByLabel(/age/i).fill('35');
+			await page.getByLabel('Age', { exact: true }).fill('35');
 			await page.getByLabel(/country/i).selectOption('us');
 			// Pick Other → inline text input appears.
 			await page.getByLabel(/native language/i).selectOption('__OTHER__');
@@ -213,6 +222,8 @@ test.describe('P1 registration', () => {
 		page
 	}) => {
 		const cfg = makeFullFeatureConfig(`p18-${Date.now()}`);
+		const fields = cfg.registration.fields as Array<Record<string, unknown>>;
+		cfg.registration.fields = fields.filter((f) => f.id !== 'native_language') as typeof cfg.registration.fields;
 		(cfg.registration.fields as Array<Record<string, unknown>>).push({
 			id: 'native_language',
 			type: 'select-or-other',
@@ -229,7 +240,7 @@ test.describe('P1 registration', () => {
 			await page.getByLabel(/email/i).fill(email);
 			await page.getByRole('button', { name: /continue|submit|next/i }).first().click();
 
-			await page.getByLabel(/age/i).fill('25');
+			await page.getByLabel('Age', { exact: true }).fill('25');
 			await page.getByLabel(/country/i).selectOption('us');
 			await page.getByLabel(/native language/i).selectOption('__OTHER__');
 			// Leave free-text input empty and submit.

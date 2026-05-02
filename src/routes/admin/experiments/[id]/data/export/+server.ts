@@ -2,8 +2,21 @@ import type { RequestHandler } from './$types';
 import { error } from '@sveltejs/kit';
 import { getExperiment, getResponseData } from '$lib/server/admin';
 import { requireExperimentAccess } from '$lib/server/collaborators';
+import { logAdminAction } from '$lib/server/audit';
 
 type Row = Record<string, unknown>;
+
+/** Collect the union of every key in `registration_data` across rows, sorted
+ *  alphabetically. Used by both the research-merge and raw-CSV export paths
+ *  when `includeRegistration=true`. */
+function collectRegistrationKeys(rows: Row[]): string[] {
+	const keys = new Set<string>();
+	for (const row of rows) {
+		const rd = row.registration_data as Record<string, unknown> | null;
+		if (rd) for (const k of Object.keys(rd)) keys.add(k);
+	}
+	return [...keys].sort();
+}
 
 function buildResearchRows(
 	rows: Row[],
@@ -81,16 +94,7 @@ function buildResearchRows(
 	// Build timestamp columns: one per phase
 	const tsColumns = phaseOrder.map((pid) => `${pid}_created_at`);
 
-	// Collect registration keys (only if requested)
-	const regKeys: string[] = [];
-	if (includeRegistration) {
-		const regKeySet = new Set<string>();
-		for (const row of rows) {
-			const rd = row.registration_data as Record<string, unknown> | null;
-			if (rd) for (const k of Object.keys(rd)) regKeySet.add(k);
-		}
-		regKeys.push(...[...regKeySet].sort());
-	}
+	const regKeys = includeRegistration ? collectRegistrationKeys(rows) : [];
 
 	// Column prefix conventions (keep this consistent for any new columns):
 	//   response_*       → response row identity (response_id, response_index)
@@ -183,7 +187,7 @@ function buildResearchRows(
 	return { mergedRows, columns };
 }
 
-export const GET: RequestHandler = async ({ params, locals, url }) => {
+export const GET: RequestHandler = async ({ params, locals, url, getClientAddress }) => {
 	await requireExperimentAccess(locals.adminUser, params.id, 'editor');
 
 	// NOTE: this endpoint is bounded by per-experiment response volume and
@@ -203,6 +207,18 @@ export const GET: RequestHandler = async ({ params, locals, url }) => {
 	const style = url.searchParams.get('style') === 'research' ? 'research' : 'raw';
 	const dateFormat = url.searchParams.get('dateFormat') === 'human' ? 'human' : 'iso';
 	const includeRegistration = url.searchParams.get('includeRegistration') === 'true';
+
+	// Best-effort audit. Captures the export shape so a future investigator
+	// can answer "did anyone download PII for participant X". Sits below the
+	// access guard so denied attempts don't pollute the log.
+	await logAdminAction({
+		adminUserId: locals.adminUser?.id ?? null,
+		adminEmail: locals.adminUser?.email ?? null,
+		experimentId: params.id,
+		action: 'data.export',
+		ip: getClientAddress(),
+		metadata: { format, style, dateFormat, includeRegistration, phaseFilter, participantFilter }
+	});
 
 	let rows = await getResponseData(params.id);
 
@@ -281,16 +297,7 @@ export const GET: RequestHandler = async ({ params, locals, url }) => {
 		return r;
 	});
 
-	// Collect all unique registration data keys if requested
-	let regKeys: string[] = [];
-	if (includeRegistration) {
-		const allRegKeys = new Set<string>();
-		for (const row of flatRows) {
-			const rd = row.registration_data as Record<string, unknown> | null;
-			if (rd) for (const k of Object.keys(rd)) allRegKeys.add(k);
-		}
-		regKeys = [...allRegKeys].sort();
-	}
+	const regKeys = includeRegistration ? collectRegistrationKeys(flatRows) : [];
 
 	// Build final rows with optional registration columns
 	const processedRows = flatRows.map((row) => {

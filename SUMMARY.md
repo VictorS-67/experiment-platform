@@ -2,8 +2,8 @@
 
 > **Purpose**: This document is written for AI agents. It contains everything needed to understand, navigate, and continue development on this project without prior context.
 >
-> **Last updated**: 2026-04-30
-> **Build status**: 0 type errors, production build succeeds. 150 Vitest unit tests passing; 83 Playwright E2E tests passing (against local Supabase).
+> **Last updated**: 2026-05-01
+> **Build status**: 0 type errors, production build succeeds. 191 Vitest unit tests passing; 83 Playwright E2E tests passing (against local Supabase).
 > **Deployed**: Vercel (using `@sveltejs/adapter-vercel`)
 
 ---
@@ -218,17 +218,23 @@ ExperimentConfig
 │   ├── type: "video" | "image" | "audio" | "text" | "mixed"
 │   ├── source: "upload" | "external-urls" | "supabase-storage" (default)
 │   ├── storagePath: string?
+│   ├── metadataKeys: string[]?                  # Editable list driving auto-gen + bulk import
 │   ├── items: StimulusItem[]
 │   │   ├── id, type?, url?, filename?
 │   │   ├── label: LocalizedString?
-│   │   └── metadata: Record<string, any>?
+│   │   ├── metadata: Record<string, string|number|boolean|null>?
+│   │   └── isAnchor: boolean?                   # Test-retest anchor — replicated once per chunk
 │   └── chunking?: ChunkingConfig
 │       ├── enabled: boolean (default false)
+│       ├── chunkOrder: "sequential" | "latin-square" | "random-per-participant"  # default sequential
 │       ├── blockOrder: "sequential" | "latin-square" | "random-per-participant"
 │       ├── withinBlockOrder: "sequential" | "random" | "random-per-participant"
-│       ├── breakScreen?: BreakScreen       # Shown between blocks
-│       │   ├── title, body: LocalizedString
-│       │   └── duration?: number           # Seconds before "Continue" button activates
+│       ├── minBreakMinutes: number?             # Cooldown between chunks (server-enforced)
+│       ├── breakScreen?: BreakScreen            # Shown between blocks; auto-engages with platform defaults if title/body unset
+│       │   ├── title?: LocalizedString          # Optional — falls back to `survey.break_default_title`
+│       │   ├── body?: LocalizedString           # Optional — falls back to `survey.break_default_body`
+│       │   ├── duration?: number                # Seconds before "Continue" button activates
+│       │   └── disabled?: boolean               # Opt-out of the auto-engaged modal at block boundaries
 │       └── chunks: ChunkConfig[]
 │           ├── id, slug (regex validated), label?: LocalizedString
 │           └── blocks: BlockConfig[]
@@ -706,6 +712,30 @@ All `<button>` inside `<form>` must have explicit `type="button"` or `type="subm
 
 In Svelte 5, `{@const}` must be an **immediate child** of `{#each}`, `{#if}`, `{:else}`, etc. It cannot be placed inside HTML elements within those blocks — it must come directly after the block opening tag.
 
+### 9. Sentinel `_`-prefix in `response_data` (after Phase 8)
+
+The `response_data` JSONB blob holds widget answers (user-defined keys, alphanumeric) plus system metadata sentinels (`_chunk`, `_timestamp`, …). Filtering convention: `Object.entries(rd).filter(([k]) => !k.startsWith('_'))` strips ALL sentinels — DO NOT hand-list `_timestamp`, that pattern is now historical.
+
+The save endpoint (`save/+server.ts`) explicitly bypasses `_`-prefixed keys in widget validation: `if (key.startsWith('_')) continue;` Adding a new sentinel later requires no server change.
+
+`_chunk: <chunkSlug>` is injected by the client at every save call site on a chunked URL. It's the lynchpin of per-chunk anchor accounting (see #10).
+
+### 10. `chunkCompletion` is the canonical "is done in current view?" — NOT `responseStore.completedStimuli`
+
+After Phase 8, the phase page derives a single `chunkCompletion: Map<id, 'completed' | 'skipped'>` (`+page.svelte` near line 130). It's the source of truth for: progress bar count, StimulusNav button colors, block-info count, `gateMode`, `resetForCurrentItem`, first-incomplete landing, autoSkip duplicate-check, `checkCompletion`'s allDone test.
+
+`responseStore.completedStimuli` retains a **global** "any rating, any chunk" semantic — used only by callers that genuinely want global state (skip-rule evaluation, the `allowRevisit=false` revisit guard for non-anchor stimuli). **DO NOT use `completedStimuli` for chunk-aware checks** — reach for `chunkCompletion` instead.
+
+For an anchor stimulus, `chunkCompletion` only marks it done if a response with `_chunk === chunkSlug` exists. So anchor buttons in subsequent chunks appear neutral until re-rated, the gatekeeper engages fresh, and the saved-responses card hides prior-chunk anchor ratings (test-retest blinding).
+
+### 11. Per-participant chunk traversal — never `chunks[0]`
+
+Every chunk-aware code path that needs "the next chunk for this participant" goes through `resolveChunkOrder` (`src/lib/utils/index.ts`) or `resolveParticipantNextChunk` (`src/lib/server/chunk-routing.ts`). The raw `config.stimuli.chunking.chunks` array is **only** safe for: array-order checklist displays (admin chips), Zod parsing, and the auto-generator output shape. Anywhere else, `chunks[0]` / `chunks[idx + 1]` is a bug — it ignores latin-square / random-per-participant rotation.
+
+### 12. `getNextResponseIndex(stimulusId)` for multi-chunk anchor saves
+
+Anchors recur across chunks; each rating creates a new `responses` row with incremented `response_index`. Hardcoding `responseIndex: 0` (as `autoSkipStimulus` did pre-fix) violates the `(participant_id, phase_id, stimulus_id, response_index)` unique constraint when an anchor gets skipped twice. Always pass `getNextResponseIndex(stimulusId)` — it returns `byStimulus.get(stimulusId).length` so each save gets a fresh index.
+
 ---
 
 ## 14. Development Phases — Completed
@@ -876,6 +906,79 @@ In Svelte 5, `{@const}` must be an **immediate child** of `{#each}`, `{#if}`, `{
 - Stale `session_token` cookie cleared when the participant row is gone (was producing redirect loops; theoretical token-reattachment hazard on backup restore)
 - Participant language preference no longer reset to `defaultLanguage` on every layout mount (silent UX bug — selection vanished within one nav)
 
+### Phase 8: Multi-session study tooling — chunking, anchors, UI overhaul, audit fixes (2026-05-01)
+
+A research study with paid raters across multiple sessions surfaced gaps in the chunking model, the participant UI, and admin chunk-progress views. Resolved as one phase. See `docs/CHANGELOG.md` for the full list; highlights:
+
+**Schema additions** (no DB migration — all JSONB-resident with Zod defaults):
+- `StimulusItem.isAnchor: boolean?` — test-retest anchor; auto-replicated into every chunk
+- `ChunkingConfig.chunkOrder: 'sequential' | 'latin-square' | 'random-per-participant'` — per-participant chunk traversal
+- `BreakScreen.title` / `body` now optional (fall back to platform defaults `survey.break_default_title` / `body`)
+- `BreakScreen.disabled: boolean?` — opt-out for the auto-engaged block-boundary modal
+
+**Sentinel `_`-prefix convention in `response_data`**:
+- New `_chunk: <chunkSlug>` injected by the client at every chunked save; mirrors `_timestamp` pattern
+- All consumers filter `!k.startsWith('_')`; no more hand-listing
+- Save endpoint validation explicitly bypasses `_`-prefixed sentinels
+
+**Per-participant chunk traversal** — never `chunks[0]`:
+- New `resolveChunkOrder` (`src/lib/utils/index.ts`) used by participant flow, admin views, and chunk-routing
+- New `resolveParticipantNextChunk` in `src/lib/server/chunk-routing.ts` — shared by `auth/+server.ts` (login flow) and `complete/+page.server.ts` (premature-finish redirect)
+- Tutorial→survey redirect, phase-completion `nextChunkUrl`, admin "next chunk URL" link, `/complete` page all use participant order
+- `firstPhaseUrl` / `handleTutorialComplete` `chunks[0]` fallbacks removed
+
+**Per-chunk anchor accounting** (test-retest reliability):
+- Single canonical `chunkCompletion: Map<id, 'completed' | 'skipped'>` derivation in the phase page
+- All chunk-aware consumers consolidated onto `chunkCompletion` (progress bar, StimulusNav button colors, block-info count, `gateMode`, `resetForCurrentItem`, first-incomplete landing, autoSkip duplicate-check, `checkCompletion`)
+- Anchor blinding: saved-responses card filters `currentResponses` to current-chunk-only when stimulus is an anchor
+- `responseStore.completedStimuli` retains GLOBAL semantic (skip-rule evaluator, allowRevisit-false revisit guard for non-anchor stimuli)
+
+**Chunk auto-gen overhaul** (`balancedStrataAssign`):
+- Multi-key balanced distribution across C chunks × B blocks
+- Anchors replicated once per chunk, distributed across blocks
+- Admin UI rewritten off `document.getElementById` to `$state` bindings; per-block balance preview shows live counts
+
+**Participant UI redesign** (B1–B5 + Tier 2 polish):
+- Cooldown banner is a live indicator (no modal-oscillation); `formatDuration` helper; modal copy uses remaining time anchored to last-response timestamp
+- First-incomplete landing for both chunked and non-chunked routes; defensive "you've already answered this" inline note
+- Tightened `.container` whitespace; new `.participant-container` 1100 px for the chunked phase page
+- StimulusNav: numeric labels (`1, 2, 3...`) when no `item.label` set; ✓ / – icons for a11y; collapsed-by-default below widgets with `Prev | Item N / M · Jump to… | Next` strip; `navigateToIndex` helper centralizes boundary-aware navigation
+- Block-segmented thicker progress bar; subtler highlight pulse with prefers-reduced-motion fallback
+- Welcome-back toast on existing-account login (sessionStorage flag)
+- Logout confirmation modal in `Header.svelte`
+- Encouraging break-screen copy with platform defaults; auto-engages at every block boundary
+- Friendlier saved-responses preview: widget labels, timestamp pairs collapsed as `0:01.05 → 0:03.50` via new `formatTimestamp`
+
+**Admin chunk-progress refactor**:
+- `getChunkProgress` bulk-ranks participants once (1 query, was N×2)
+- New return shape `{ progress[], nextChunk: { slug, canStartAt } }` per participant
+- Admin "next chunk URL" link respects per-participant order
+
+**Audit-driven cleanup** (post-pilot, F0–F7):
+- F0 progress bar 198% → counts items in current chunk view via `chunkCompletion.size`
+- F1 admin chunk-progress per-participant
+- F2/F3 chunks[0] fallbacks removed
+- F4 navigateToIndex centralizes nav; forward-cross-boundary triggers break screen
+- F5 /complete redirect on incomplete chunks
+- F6 first-incomplete landing extended to non-chunked
+- F7 per-chunk anchor accounting (the deepest change)
+
+**Pilot-bug-prevention pass** (caught before any participant ran the new flow):
+- Save endpoint widget validation now bypasses `_`-prefixed sentinels (would have rejected every chunked save with `400 Unknown widget: _chunk`)
+- `autoSkipStimulus` uses `getNextResponseIndex(stimulusId)` (hardcoded `0` would have hit unique-constraint collisions on anchor re-skips)
+- Three places hand-listing `_timestamp` switched to `!k.startsWith('_')` (review filterEmpty, buildSavedEntries, ReviewItemDisplay key filter, review saved-reasoning render)
+- Anchor blinding leak fixed in `currentResponses` (saved-responses card was leaking prior-chunk anchor ratings)
+
+**Bulk-import improvements**:
+- CSV `id` column support (explicit ID wins over slugified filename — pre-anonymise IDs)
+- CSV `isAnchor` column support (truthy values flag the row at import time)
+- Storage cross-check at parse time: missing-from-storage rows get red badge + auto-deselect
+- Storage-check endpoint paginates with `?all=true` (was silently capped at 200)
+
+**Admin: per-participant session timing surface**:
+- `getParticipantSessionTimings` in `src/lib/server/admin.ts` — pure compute over `responses` rows; one row per chunk attempted (start, end, duration, response count)
+- "Sessions" table on the participant detail page surfaces these for payment tracking
+
 ---
 
 ## 15. What Is Left To Do
@@ -995,6 +1098,20 @@ node scripts/upload-all-videos.js
 | Postgres-backed rate limiter | `src/lib/server/rate-limit.ts` |
 | Pagination async generator | `src/lib/server/pagination.ts` |
 | Bulk import modal | `src/lib/components/admin/config/BulkImportModal.svelte` |
+| Bulk import helpers (parsing, item building) | `src/lib/utils/bulk-import.ts` |
+| Chunking section (auto-gen + balance preview) | `src/lib/components/admin/config/ChunkingSection.svelte` |
+| Stimuli section (anchor checkbox, metadata editor) | `src/lib/components/admin/config/StimuliSection.svelte` |
+| Per-participant next-chunk resolver | `src/lib/server/chunk-routing.ts` |
+| Balanced strata splitter (`balancedStrataAssign`, `resolveChunkOrder`, `formatDuration`) | `src/lib/utils/index.ts` |
+| Timestamp formatter (`formatTimestamp`) | `src/lib/utils/time-format.ts` |
+| Response-data helpers (`widgetEntries`, `widgetKeys`, `isAllNullResponse`, `inScopeForChunk`, `isStimulusDoneInChunk`) | `src/lib/utils/response-data.ts` |
+| Storage URL signing (private bucket) | `src/lib/server/storage.ts` |
+| Storage check endpoint (paginated) | `src/routes/admin/experiments/[id]/storage-check/+server.ts` |
+| Chunked phase route + server load | `src/routes/e/[slug]/c/[chunkSlug]/[phaseSlug]/` |
+| Complete page (now redirects on incomplete chunks) | `src/routes/e/[slug]/complete/+page.server.ts` |
+| Header (logout confirmation modal) | `src/lib/components/layout/Header.svelte` |
+| Progress bar (block-segmented) | `src/lib/components/layout/ProgressBar.svelte` |
+| Stimulus nav (collapsed-by-default + a11y icons) | `src/lib/components/layout/StimulusNav.svelte` |
 | Collaborators panel | `src/lib/components/admin/CollaboratorsPanel.svelte` |
 | Field wrapper (a11y) | `src/lib/components/admin/config/Field.svelte` |
 | E2E fixtures + helpers | `tests/e2e/fixtures.ts`, `tests/e2e/seed.ts` |
@@ -1003,3 +1120,5 @@ node scripts/upload-all-videos.js
 | Experiment configs (local) | `configs/` (gitignored) |
 | DB seeding script | `scripts/seed.js` |
 | Config migrator | `scripts/migrate-configs.ts` |
+| CSV merge utility (Phase 8) | `scripts/merge-summary-csvs.js` |
+| Storage diagnostics (Phase 8) | `scripts/list-storage.js`, `scripts/check-csv-vs-storage.js` |

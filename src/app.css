@@ -26,7 +26,16 @@ body {
 .container {
 	max-width: 800px;
 	margin: 0 auto;
-	padding: 2rem;
+	padding: 0.75rem 2rem 1.5rem;
+}
+
+/* Wider variant for participant-facing pages where the stimulus benefits from
+ * more room (e.g. point-light video). Registration / completion pages can keep
+ * the narrower 800 px feel by sticking with `.container`. */
+.participant-container {
+	max-width: 1100px;
+	margin: 0 auto;
+	padding: 0.75rem 2rem 1.5rem;
 }
 
 /* Video button states — matches current project's visual language */
@@ -83,6 +92,27 @@ body {
 	animation: shimmer 1.5s infinite;
 }
 
+/* Stimulus highlight pulse — fires once when navigation jumps to a different
+ * stimulus. A 600 ms outline fade replaces the previous always-on `ring-4`
+ * which became visually exhausting after ~30 jumps in a session. */
+@keyframes stimulus-pulse {
+	0%   { outline-color: rgb(99 102 241 / 0.8); outline-width: 2px; }
+	100% { outline-color: rgb(99 102 241 / 0); outline-width: 2px; }
+}
+
+.stimulus-highlight {
+	outline: 2px solid rgb(99 102 241 / 0.8);
+	outline-offset: 2px;
+	animation: stimulus-pulse 600ms ease-out forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.stimulus-highlight {
+		animation: none;
+		outline: 2px solid rgb(99 102 241 / 0.6);
+	}
+}
+
 /* Spinner animation */
 @keyframes spin {
 	to { transform: rotate(360deg); }
@@ -135,8 +165,11 @@ body {
 .modal-content {
 	background: white;
 	border-radius: 0.5rem;
-	padding: 2rem;
 	max-width: 500px;
 	width: 90%;
 	box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+	max-height: 90vh;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
 }

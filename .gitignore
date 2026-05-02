@@ -31,6 +31,7 @@ previous_expe_data/
 .bug_list.md
 .claudeignore
 FUTURE_PLANS.md
+notes/
 
 # Data exports — contain PII / session tokens, never commit
 backup-*.json

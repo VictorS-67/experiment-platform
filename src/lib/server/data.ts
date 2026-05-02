@@ -1,4 +1,6 @@
 import { getServerSupabase } from './supabase';
+import { unwrap, unwrapVoid } from './db';
+import { detectAudioType } from '$lib/utils/audio-detect';
 import type { ParticipantRecord, ResponseRecord } from '$lib/services/data';
 
 // Explicit column list used on every participant read — keeps bandwidth
@@ -49,12 +51,13 @@ export async function rotateSessionToken(
 ): Promise<string> {
 	const supabase = getServerSupabase();
 	const newToken = crypto.randomUUID();
-	const { error } = await supabase
-		.from('participants')
-		.update({ session_token: newToken, last_rotated_at: new Date().toISOString() })
-		.eq('id', participantId);
-
-	if (error) { console.error('Failed to rotate session token:', error); throw new Error('Failed to rotate session token'); }
+	unwrapVoid(
+		await supabase
+			.from('participants')
+			.update({ session_token: newToken, last_rotated_at: new Date().toISOString() })
+			.eq('id', participantId),
+		'Failed to rotate session token'
+	);
 	return newToken;
 }
 
@@ -89,17 +92,18 @@ export async function createParticipant(
 	registrationData: Record<string, unknown>
 ): Promise<ParticipantRecord & { session_token: string }> {
 	const supabase = getServerSupabase();
-	const { data, error } = await supabase
-		.from('participants')
-		.insert({
-			experiment_id: experimentId,
-			email: email.toLowerCase().trim(),
-			registration_data: registrationData
-		})
-		.select(PARTICIPANT_COLUMNS)
-		.single();
-
-	if (error) { console.error('Failed to register participant:', error); throw new Error('Failed to register'); }
+	const data = unwrap(
+		await supabase
+			.from('participants')
+			.insert({
+				experiment_id: experimentId,
+				email: email.toLowerCase().trim(),
+				registration_data: registrationData
+			})
+			.select(PARTICIPANT_COLUMNS)
+			.single(),
+		'Failed to register'
+	);
 	return data as ParticipantRecord & { session_token: string };
 }
 
@@ -136,20 +140,21 @@ export async function saveResponse(
 	responseIndex: number = 0
 ): Promise<ResponseRecord> {
 	const supabase = getServerSupabase();
-	const { data, error } = await supabase
-		.from('responses')
-		.insert({
-			experiment_id: experimentId,
-			participant_id: participantId,
-			phase_id: phaseId,
-			stimulus_id: stimulusId,
-			response_data: responseData,
-			response_index: responseIndex
-		})
-		.select()
-		.single();
-
-	if (error) { console.error('Failed to save response:', error); throw new Error('Failed to save response'); }
+	const data = unwrap(
+		await supabase
+			.from('responses')
+			.insert({
+				experiment_id: experimentId,
+				participant_id: participantId,
+				phase_id: phaseId,
+				stimulus_id: stimulusId,
+				response_data: responseData,
+				response_index: responseIndex
+			})
+			.select()
+			.single(),
+		'Failed to save response'
+	);
 	return data as ResponseRecord;
 }
 
@@ -176,6 +181,15 @@ export async function uploadFile(
 		throw new Error(`File too large: ${file.size} bytes (max ${MAX_FILE_SIZE})`);
 	}
 
+	// Defense-in-depth: verify the file's magic bytes match the declared
+	// content type. Without this, a client could upload arbitrary bytes
+	// (e.g. a script payload) with a spoofed `Content-Type: audio/webm`.
+	const header = await file.slice(0, 8).arrayBuffer();
+	const detectedType = detectAudioType(header);
+	if (detectedType !== baseType) {
+		throw new Error(`File contents do not match declared type ${baseType}`);
+	}
+
 	// Validate path using a segment-level whitelist instead of substring
 	// replacement. Rejects anything that isn't strictly
 	// `audio/{experimentId}/<filename-segments>` where each segment only
@@ -195,11 +209,10 @@ export async function uploadFile(
 	const normalizedPath = segments.join('/');
 
 	const supabase = getServerSupabase();
-	const { error } = await supabase.storage
-		.from(bucket)
-		.upload(normalizedPath, file, { contentType, upsert: false });
-
-	if (error) { console.error('Failed to upload file:', error); throw new Error('Failed to upload file'); }
+	unwrapVoid(
+		await supabase.storage.from(bucket).upload(normalizedPath, file, { contentType, upsert: false }),
+		'Failed to upload file'
+	);
 	return normalizedPath;
 }
 
@@ -228,14 +241,14 @@ export async function saveChunkAssignment(
 ): Promise<void> {
 	const supabase = getServerSupabase();
 	const assignment = { blockOrder, assignedAt: new Date().toISOString() };
-
-	const { error } = await supabase.rpc('set_chunk_assignment', {
-		p_id: participantId,
-		chunk_key: chunkSlug,
-		assignment
-	});
-
-	if (error) { console.error('Failed to save chunk assignment:', error); throw new Error('Failed to save chunk assignment'); }
+	unwrapVoid(
+		await supabase.rpc('set_chunk_assignment', {
+			p_id: participantId,
+			chunk_key: chunkSlug,
+			assignment
+		}),
+		'Failed to save chunk assignment'
+	);
 }
 
 export async function getParticipantIndex(

@@ -3,6 +3,8 @@
 	import { beforeNavigate } from '$app/navigation';
 	import { getContext } from 'svelte';
 	import ConfigEditor from '$lib/components/admin/ConfigEditor.svelte';
+	import Toast from '$lib/components/admin/Toast.svelte';
+	import { ToastState } from '$lib/utils/toast.svelte';
 	import type { ExperimentConfig } from '$lib/config/schema';
 
 	let { data, form } = $props();
@@ -38,20 +40,15 @@
 	// confusing UX.
 	let canEdit = $derived(data.myRole === 'owner' || data.myRole === 'editor');
 
-	let toast = $state<{ type: 'success' | 'error'; message: string } | null>(null);
+	const toast = new ToastState();
 
 	let isJsonMode = $derived(configEditorCtx.activeSection === 'json');
 
-	function showToast(type: 'success' | 'error', message: string) {
-		toast = { type, message };
-		setTimeout(() => (toast = null), 3000);
-	}
-
 	$effect(() => {
 		if (form?.success) {
-			showToast('success', 'Config saved.');
+			toast.show('success', 'Config saved.');
 		} else if (form?.error) {
-			showToast('error', form.error);
+			toast.show('error', form.error);
 		}
 	});
 
@@ -140,11 +137,7 @@
 	<title>Config - {data.experiment.config?.metadata?.title?.en ?? data.experiment.slug} - Admin</title>
 </svelte:head>
 
-{#if toast}
-	<div class="mb-4 p-3 rounded text-sm {toast.type === 'success' ? 'bg-green-50 border border-green-200 text-green-700' : 'bg-red-50 border border-red-200 text-red-700'}">
-		<pre class="whitespace-pre-wrap font-sans">{toast.message}</pre>
-	</div>
-{/if}
+<Toast toast={toast.current} />
 
 {#if data.experiment.status === 'active' && data.participantCount > 0}
 	<div class="mb-4 p-3 bg-amber-50 border border-amber-200 rounded text-sm text-amber-800">

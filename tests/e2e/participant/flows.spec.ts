@@ -107,8 +107,10 @@ test.describe('P4.2 branch rule', () => {
 		await page.waitForURL(/\/main/);
 		await page.getByRole('button', { name: '1' }).first().click();
 		await page.getByRole('button', { name: /save/i }).click();
-		// Click Next Phase in completion modal.
-		await page.getByRole('button', { name: /next phase|next/i }).last().click();
+		// Click Next Phase in completion modal. Scope to dialog so we don't race
+		// with the NavStrip's "Next →" button (which also matches /next/i and
+		// can be resolved before the modal renders).
+		await page.getByRole('dialog').getByRole('button', { name: /next phase|next/i }).click();
 		// Branch rule should send to /branch (not /second).
 		await page.waitForURL(/\/e\/.+\/branch/, { timeout: 5000 });
 
@@ -124,7 +126,7 @@ test.describe('P4.2 branch rule', () => {
 		await page2.waitForURL(/\/main/);
 		await page2.getByRole('button', { name: '3' }).first().click();
 		await page2.getByRole('button', { name: /save/i }).click();
-		await page2.getByRole('button', { name: /next phase|next/i }).last().click();
+		await page2.getByRole('dialog').getByRole('button', { name: /next phase|next/i }).click();
 		await page2.waitForURL(/\/e\/.+\/second/, { timeout: 5000 });
 		await ctx2.close();
 
@@ -136,11 +138,12 @@ test.describe('P5.3 review filterEmpty', () => {
 	test('filterEmpty=true hides source responses whose widget values are all null', async ({
 		page
 	}) => {
-		// Custom fixture: main phase has gatekeeper with noResponseValue="null"
-		// (the literal string that filterEmpty treats as empty). Participant
-		// clicks "No" on stimulus s2 → response_data = { rating: 'null' }. The
-		// review phase's filterEmpty: true should hide s2's review item, so the
-		// nav shows only 2 items (s1 and s3), not 3.
+		// Custom fixture: main phase has a gatekeeper. Participant clicks "No"
+		// on stimulus s2 → buildSkipResponseData writes JSON null per widget
+		// (`response_data = { rating: null }`). The review phase's
+		// filterEmpty: true treats responses with all-null widget values as
+		// empty (see isAllNullResponse) and hides them, so the nav shows only
+		// 2 items (s1 and s3), not 3.
 		const slug = `p53-${Date.now()}`;
 		const cfg = {
 			slug,
@@ -161,10 +164,11 @@ test.describe('P5.3 review filterEmpty', () => {
 					type: 'stimulus-response',
 					title: { en: 'Main' },
 					gatekeeperQuestion: {
-						text: { en: 'Q?' },
-						yesLabel: { en: 'Yes' },
-						noLabel: { en: 'No' },
-						noResponseValue: 'null',
+						initial: {
+							text: { en: 'Q?' },
+							yesLabel: { en: 'Yes' },
+							noLabel: { en: 'No' }
+						},
 						skipToNext: true
 					},
 					responseWidgets: [
@@ -216,14 +220,14 @@ test.describe('P5.3 review filterEmpty', () => {
 		await page.locator('#gatekeeper-yes').click();
 		await page.getByRole('button', { name: '3' }).first().click();
 		await page.getByRole('button', { name: /^save$/i }).click();
-		// s2: No → saves with rating='null' (filterEmpty hides)
+		// s2: No → saves with rating=null (filterEmpty hides)
 		await page.locator('#gatekeeper-no').click();
 		// s3: Yes + rating=5 (kept)
 		await page.locator('#gatekeeper-yes').click();
 		await page.getByRole('button', { name: '5' }).first().click();
 		await page.getByRole('button', { name: /^save$/i }).click();
 
-		await page.getByRole('button', { name: /next phase|next/i }).last().click();
+		await page.getByRole('dialog').getByRole('button', { name: /next phase|next/i }).click();
 		await page.waitForURL(/\/review/);
 
 		// Review nav should have exactly 2 items (s1 and s3, not s2).
@@ -257,7 +261,7 @@ test.describe('P8.1 completion screen', () => {
 			await page.getByRole('button', { name: /save/i }).click();
 		}
 		// Next phase → review.
-		await page.getByRole('button', { name: /next phase|next/i }).last().click();
+		await page.getByRole('dialog').getByRole('button', { name: /next phase|next/i }).click();
 		await page.waitForURL(/\/review/);
 
 		// Review phase: 3 items, confidence=4 each.
@@ -316,7 +320,7 @@ test.describe('P8.1 completion screen', () => {
 				await page.getByRole('button', { name: '3' }).first().click();
 				await page.getByRole('button', { name: /save/i }).click();
 			}
-			await page.getByRole('button', { name: /next phase|next/i }).last().click();
+			await page.getByRole('dialog').getByRole('button', { name: /next phase|next/i }).click();
 			await page.waitForURL(/\/review/);
 
 			for (let i = 0; i < 3; i++) {

@@ -63,8 +63,8 @@ test.describe('P5 review phase', () => {
 		}
 
 		// After the last save the completion modal shows. Click "Next phase".
-		const nextPhaseBtn = page.getByRole('button', { name: /next phase|next/i }).last();
-		await nextPhaseBtn.click();
+		// Scope to dialog so we don't race with the NavStrip's "Next →".
+		await page.getByRole('dialog').getByRole('button', { name: /next phase|next/i }).click();
 		await page.waitForURL(/\/e\/.+\/review/);
 
 		// --- Review phase: verify nav has 3 items and each item id looks like a UUID. ---

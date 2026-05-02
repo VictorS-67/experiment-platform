@@ -159,7 +159,7 @@
 		driverInstance = driver({
 			steps,
 			showProgress: true,
-			progressText: `${i18n.platform('tutorial.progress')} {{current}} ${i18n.platform('tutorial.of')} {{total}}`,
+			progressText: `${i18n.platform('tutorial.progress')} {{current}} ${i18n.platform('common.of')} {{total}}`,
 			nextBtnText: i18n.platform('tutorial.next'),
 			prevBtnText: i18n.platform('tutorial.previous'),
 			doneBtnText: i18n.platform('tutorial.finish'),
@@ -232,7 +232,7 @@
 				class="w-full bg-indigo-600 text-white py-2 px-4 rounded hover:bg-indigo-700 cursor-pointer font-medium"
 				onclick={proceedFromIntro}
 			>
-				{i18n.localized(config.introduction.buttonText ?? {}, i18n.platform('tutorial.continue'))}
+				{i18n.localized(config.introduction.buttonText ?? {}, i18n.platform('common.continue'))}
 			</button>
 		</div>
 	</div>
@@ -268,7 +268,7 @@
 				class="w-full bg-indigo-600 text-white py-2 px-4 rounded hover:bg-indigo-700 cursor-pointer font-medium"
 				onclick={finish}
 			>
-				{i18n.localized(config.completion.buttonText, i18n.platform('survey.continue'))}
+				{i18n.localized(config.completion.buttonText, i18n.platform('common.continue'))}
 			</button>
 		</div>
 	</div>

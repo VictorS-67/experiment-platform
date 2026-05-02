@@ -15,8 +15,14 @@
 		"test:watch": "vitest",
 		"test:e2e": "playwright test",
 		"test:e2e:ui": "playwright test --ui",
+		"pw": "node scripts/pw.js",
+		"test:race:chunk": "tsx scripts/race/r1-chunk-assignment.ts",
+		"test:race:config": "tsx scripts/race/r2-config-save.ts",
+		"test:race:burst": "tsx scripts/race/r3-burst.ts",
 		"migrate-configs": "tsx scripts/migrate-configs.ts",
-		"migrate-configs:write": "tsx scripts/migrate-configs.ts --write"
+		"migrate-configs:write": "tsx scripts/migrate-configs.ts --write",
+		"check-configs": "tsx scripts/migrate-configs.ts",
+		"check-configs:fixtures": "tsx scripts/check-configs-against-fixtures.ts"
 	},
 	"devDependencies": {
 		"@playwright/test": "^1.59.1",

@@ -27,11 +27,15 @@
 	let src = $derived(srcProp ?? getStimulusVideoUrl(item, config));
 </script>
 
-<div class="w-full rounded-lg overflow-hidden bg-black" id="stimulus-player">
+<div class="w-full rounded-lg overflow-hidden bg-black flex justify-center" id="stimulus-player">
+	<!-- Cap height at 60vh so the gatekeeper / response widget below the
+	     video stays in the viewport on laptop-class screens (1500x680 ish).
+	     `w-auto h-auto` lets the video letterbox inside the cap rather than
+	     stretching to fill width. -->
 	<video
 		bind:this={mediaElement}
 		src={src}
-		class="w-full"
+		class="max-h-[60vh] w-auto h-auto"
 		controls
 		preload="metadata"
 	>

@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { preserveFields, withLoadingFlag } from '$lib/utils/enhance';
+	import { formatDate } from '$lib/utils/format-date';
 	import type { CollaboratorRole, Collaborator, PendingInvite } from '$lib/server/collaborators';
 
 	interface Props {
@@ -58,9 +60,7 @@
 							<form
 								method="POST"
 								action="?/setRole"
-								use:enhance={() => {
-									return async ({ update }) => { await update({ reset: false }); };
-								}}
+								use:enhance={preserveFields}
 							>
 								<input type="hidden" name="userId" value={c.userId} />
 								<select
@@ -84,9 +84,7 @@
 							<form
 								method="POST"
 								action="?/remove"
-								use:enhance={() => {
-									return async ({ update }) => { await update({ reset: false }); };
-								}}
+								use:enhance={preserveFields}
 							>
 								<input type="hidden" name="userId" value={c.userId} />
 								<button
@@ -118,7 +116,7 @@
 					<tr class="border-b border-gray-100">
 						<td class="py-2 text-gray-800">{inv.email}</td>
 						<td class="py-2"><span class="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-700">{inv.role}</span></td>
-						<td class="py-2 text-gray-500 text-xs">{new Date(inv.expiresAt).toLocaleDateString()}</td>
+						<td class="py-2 text-gray-500 text-xs">{formatDate(inv.expiresAt)}</td>
 						<td class="py-2 text-right">
 							{#if isOwner}
 								<button
@@ -129,9 +127,7 @@
 								<form
 									method="POST"
 									action="?/revokeInvite"
-									use:enhance={() => {
-										return async ({ update }) => { await update({ reset: false }); };
-									}}
+									use:enhance={preserveFields}
 									class="inline"
 								>
 									<input type="hidden" name="inviteId" value={inv.id} />
@@ -152,13 +148,7 @@
 		<form
 			method="POST"
 			action="?/invite"
-			use:enhance={() => {
-				inviting = true;
-				return async ({ update }) => {
-					await update({ reset: false });
-					inviting = false;
-				};
-			}}
+			use:enhance={withLoadingFlag((v) => (inviting = v))}
 			class="mt-4 pt-4 border-t border-gray-100"
 		>
 			<label class="block text-sm font-medium text-gray-700 mb-2" for="invite-email">Invite by email</label>

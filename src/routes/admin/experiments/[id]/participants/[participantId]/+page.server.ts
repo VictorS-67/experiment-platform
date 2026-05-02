@@ -1,9 +1,10 @@
 import type { PageServerLoad, Actions } from './$types';
 import { error, fail, isRedirect, redirect } from '@sveltejs/kit';
-import { getExperiment, getParticipantDetail, deleteParticipant, resetParticipantResponses } from '$lib/server/admin';
+import { getExperiment, getParticipantDetail, deleteParticipant, resetParticipantResponses, getParticipantSessionTimings } from '$lib/server/admin';
 import { requireExperimentAccess } from '$lib/server/collaborators';
 import { logAdminAction } from '$lib/server/audit';
 import { signAudioUrls } from '$lib/server/storage';
+import { isAudioPath } from '$lib/utils/response-data';
 
 export const load: PageServerLoad = async ({ params, locals }) => {
 	await requireExperimentAccess(locals.adminUser, params.id, 'viewer');
@@ -20,14 +21,17 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	for (const responses of Object.values(detail.responsesByPhase)) {
 		for (const r of responses) {
 			for (const val of Object.values(r.responseData)) {
-				if (typeof val === 'string' && /^audio\/.+\.(webm|mp3|ogg|wav|m4a)$/i.test(val))
-					audioPaths.push(val);
+				if (isAudioPath(val)) audioPaths.push(val);
 			}
 		}
 	}
 	const signedAudioUrls = await signAudioUrls([...new Set(audioPaths)]);
 
-	return { experiment, participant: detail.participant, responsesByPhase: detail.responsesByPhase, signedAudioUrls };
+	// Per-chunk session timings (start/end/duration) for payment tracking on
+	// multi-session studies. Empty array when the experiment has no chunking.
+	const sessionTimings = await getParticipantSessionTimings(params.id, params.participantId);
+
+	return { experiment, participant: detail.participant, responsesByPhase: detail.responsesByPhase, signedAudioUrls, sessionTimings };
 };
 
 export const actions: Actions = {

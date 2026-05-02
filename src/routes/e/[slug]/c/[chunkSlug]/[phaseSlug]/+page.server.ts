@@ -7,20 +7,9 @@ import {
 	getParticipantIndex
 } from '$lib/server/data';
 import { signStimuliUrls, signAudioUrls } from '$lib/server/storage';
-import type { ResponseRecord } from '$lib/services/data';
-import { latinSquareOrder, seededShuffle } from '$lib/utils';
+import { extractAudioPaths, isStimulusDoneInChunk } from '$lib/utils/response-data';
+import { latinSquareOrder, seededShuffle, resolveChunkOrder } from '$lib/utils';
 import { redirect } from '@sveltejs/kit';
-
-function extractAudioPaths(responses: ResponseRecord[]): string[] {
-	const paths: string[] = [];
-	for (const r of responses) {
-		for (const val of Object.values(r.response_data)) {
-			if (typeof val === 'string' && /^audio\/.+\.(webm|mp3|ogg|wav|m4a)$/i.test(val))
-				paths.push(val);
-		}
-	}
-	return paths;
-}
 
 export const load: PageServerLoad = async ({ locals, parent, params }) => {
 	const { experiment } = await parent();
@@ -57,10 +46,13 @@ export const load: PageServerLoad = async ({ locals, parent, params }) => {
 		redirect(302, `/e/${slug}`);
 	}
 
+	// Participant index is needed for both block-order latin-square AND for
+	// per-participant chunk-order resolution. Compute once.
+	const participantIndex = await getParticipantIndex(experimentId, participant.id);
+
 	// Get or compute block order assignment for this participant + chunk
 	let assignment = await getChunkAssignment(participant.id, chunkSlug);
 	if (!assignment) {
-		const participantIndex = await getParticipantIndex(experimentId, participant.id);
 		let blockOrder: string[];
 		if (chunking.blockOrder === 'latin-square') {
 			blockOrder = latinSquareOrder(chunk.blocks.map((b: { id: string }) => b.id), participantIndex);
@@ -113,6 +105,43 @@ export const load: PageServerLoad = async ({ locals, parent, params }) => {
 
 	const breakScreen = chunking.breakScreen ?? null;
 
+	// Per-participant chunk order — used by the phase-completion modal to link
+	// to the *next chunk in this participant's traversal*, not chunks[idx+1].
+	const orderedChunkSlugs = resolveChunkOrder(
+		chunking.chunks.map((c: { slug: string }) => c.slug),
+		(chunking.chunkOrder ?? 'sequential') as 'sequential' | 'latin-square' | 'random-per-participant',
+		participantIndex,
+		participant.id
+	);
+
+	// Mid-chunk drop-off detection — used to show a "Welcome back" screen on
+	// re-entry when 0 < completed < total stimuli for this chunk. Anchor-aware
+	// via `isStimulusDoneInChunk`: an anchor rated in a *different* chunk does
+	// NOT count toward this chunk's progress (otherwise a freshly-entered chunk
+	// would show "4/126 — welcome back" the moment it opens).
+	const itemMap = new Map(
+		(experiment.config.stimuli?.items ?? []).map((s: { id: string; isAnchor?: boolean }) => [s.id, s])
+	);
+	const allParticipantResponses = await loadResponses(experimentId, participant.id);
+	const responsesByStim = new Map<string, typeof allParticipantResponses>();
+	for (const r of allParticipantResponses) {
+		const arr = responsesByStim.get(r.stimulus_id) ?? [];
+		arr.push(r);
+		responsesByStim.set(r.stimulus_id, arr);
+	}
+	let completedCount = 0;
+	for (const id of orderedStimulusIds) {
+		const stim = itemMap.get(id) ?? { id, isAnchor: false };
+		if (isStimulusDoneInChunk(stim, chunkSlug, responsesByStim.get(id) ?? [])) {
+			completedCount++;
+		}
+	}
+	const totalCount = orderedStimulusIds.length;
+	const resumeContext =
+		completedCount > 0 && completedCount < totalCount
+			? { completed: completedCount, total: totalCount }
+			: null;
+
 	if (phase.type === 'review' && phase.reviewConfig) {
 		const sourceResponses = await loadResponses(experimentId, participant.id, phase.reviewConfig.sourcePhase);
 		const responses = await loadResponses(experimentId, participant.id, phase.id);
@@ -120,7 +149,7 @@ export const load: PageServerLoad = async ({ locals, parent, params }) => {
 			signStimuliUrls(experiment.config.stimuli),
 			signAudioUrls(extractAudioPaths([...sourceResponses, ...responses]))
 		]);
-		return { participant: participantData, responses, sourceResponses, phase, orderedStimulusIds, chunkSlug, blockBoundaries, breakScreen, signedUrls: { ...stimuliUrls, ...audioUrls } };
+		return { participant: participantData, responses, sourceResponses, phase, orderedStimulusIds, chunkSlug, blockBoundaries, breakScreen, orderedChunkSlugs, resumeContext, signedUrls: { ...stimuliUrls, ...audioUrls } };
 	}
 
 	const responses = await loadResponses(experimentId, participant.id, phase.id);
@@ -128,5 +157,5 @@ export const load: PageServerLoad = async ({ locals, parent, params }) => {
 		signStimuliUrls(experiment.config.stimuli),
 		signAudioUrls(extractAudioPaths(responses))
 	]);
-	return { participant: participantData, responses, phase, orderedStimulusIds, chunkSlug, blockBoundaries, breakScreen, signedUrls: { ...stimuliUrls, ...audioUrls } };
+	return { participant: participantData, responses, phase, orderedStimulusIds, chunkSlug, blockBoundaries, breakScreen, orderedChunkSlugs, resumeContext, signedUrls: { ...stimuliUrls, ...audioUrls } };
 };

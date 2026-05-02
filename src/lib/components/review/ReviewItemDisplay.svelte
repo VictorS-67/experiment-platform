@@ -3,6 +3,8 @@
 	import type { StimuliConfigType, StimulusItemType } from '$lib/config/schema';
 	import StimulusRenderer from '$lib/components/stimuli/StimulusRenderer.svelte';
 	import { createReplayController } from '$lib/utils/replay';
+	import { formatTimestamp } from '$lib/utils/time-format';
+	import { widgetEntries, isAudioPath } from '$lib/utils/response-data';
 	import { i18n } from '$lib/i18n/index.svelte';
 	import { PUBLIC_SUPABASE_URL } from '$env/static/public';
 
@@ -34,12 +36,12 @@
 		const audios: { key: string; path: string }[] = [];
 		const regular: { key: string; val: unknown }[] = [];
 
-		for (const [key, val] of Object.entries(data)) {
-			if (key === '_timestamp' || val === null || val === 'null') continue;
+		for (const [key, val] of widgetEntries(data)) {
+			if (val === null || val === 'null') continue;
 			if (typeof val === 'string' && /^\d+(\.\d+)?-\d+(\.\d+)?$/.test(val)) {
 				const [s, e] = val.split('-');
 				timestamps.push({ widgetId: key, start: parseFloat(s), end: parseFloat(e) });
-			} else if (typeof val === 'string' && /^audio\/.+\.(webm|mp3|ogg|wav|m4a)$/i.test(val)) {
+			} else if (isAudioPath(val)) {
 				audios.push({ key, path: val });
 			} else {
 				regular.push({ key, val });
@@ -48,11 +50,9 @@
 		return { timestamps, audios, regular };
 	});
 
-	function formatTime(secs: number): string {
-		const m = Math.floor(secs / 60);
-		const s = (secs % 60).toFixed(2).padStart(5, '0');
-		return `${m}:${s}`;
-	}
+	// Reuses the unified timestamp formatter (`m:ss.cs`). Local helper kept for
+	// call-site clarity; delegates to the shared util.
+	const formatTime = formatTimestamp;
 
 	function handleReplay(start: number, end: number) {
 		if (!mediaElement) return;

@@ -1,19 +1,8 @@
 import type { PageServerLoad } from './$types';
 import { getParticipantByToken, loadResponses } from '$lib/server/data';
 import { signStimuliUrls, signAudioUrls } from '$lib/server/storage';
-import type { ResponseRecord } from '$lib/services/data';
+import { extractAudioPaths } from '$lib/utils/response-data';
 import { redirect } from '@sveltejs/kit';
-
-function extractAudioPaths(responses: ResponseRecord[]): string[] {
-	const paths: string[] = [];
-	for (const r of responses) {
-		for (const val of Object.values(r.response_data)) {
-			if (typeof val === 'string' && /^audio\/.+\.(webm|mp3|ogg|wav|m4a)$/i.test(val))
-				paths.push(val);
-		}
-	}
-	return paths;
-}
 
 export const load: PageServerLoad = async ({ locals, parent, params }) => {
 	const { experiment } = await parent();

@@ -32,6 +32,11 @@ jobs:
 
       - run: npm run check
       - run: npm run test
+      # Verify the current schema can still parse every E2E fixture config
+      # (after migration rules apply). Catches schema-tightening changes that
+      # would invalidate stored configs in prod. See CLAUDE.md "Schema
+      # migration runbook" for the local-prod and pre-deploy layers.
+      - run: npm run check-configs:fixtures
       - run: npm run build
 
   e2e:

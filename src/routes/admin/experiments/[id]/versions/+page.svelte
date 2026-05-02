@@ -1,22 +1,20 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import Toast from '$lib/components/admin/Toast.svelte';
+	import { ToastState } from '$lib/utils/toast.svelte';
+	import { withLoadingFlag } from '$lib/utils/enhance';
+	import { formatDateTime } from '$lib/utils/format-date';
 
 	let { data, form } = $props();
 
 	let rollingBack = $state(false);
-
-	let toast = $state<{ type: 'success' | 'error'; message: string } | null>(null);
-
-	function showToast(type: 'success' | 'error', message: string) {
-		toast = { type, message };
-		setTimeout(() => (toast = null), 3000);
-	}
+	const toast = new ToastState();
 
 	$effect(() => {
 		if (form?.success && form.rolledBack) {
-			showToast('success', 'Config restored to selected version.');
+			toast.show('success', 'Config restored to selected version.');
 		} else if (form?.error) {
-			showToast('error', form.error);
+			toast.show('error', form.error);
 		}
 	});
 </script>
@@ -25,11 +23,7 @@
 	<title>Versions - {data.experiment.config?.metadata?.title?.en ?? data.experiment.slug} - Admin</title>
 </svelte:head>
 
-{#if toast}
-	<div class="mb-4 p-3 rounded text-sm {toast.type === 'success' ? 'bg-green-50 border border-green-200 text-green-700' : 'bg-red-50 border border-red-200 text-red-700'}">
-		<pre class="whitespace-pre-wrap font-sans">{toast.message}</pre>
-	</div>
-{/if}
+<Toast toast={toast.current} />
 
 <div class="max-w-2xl">
 	{#if data.versions.length === 0}
@@ -54,15 +48,12 @@
 					{#each data.versions as v, i}
 						<tr class="hover:bg-gray-50">
 							<td class="px-4 py-3 text-gray-800 font-medium">v{v.version_number}</td>
-							<td class="px-4 py-3 text-gray-500">{new Date(v.created_at).toLocaleString()}</td>
+							<td class="px-4 py-3 text-gray-500">{formatDateTime(v.created_at)}</td>
 							<td class="px-4 py-3 text-right">
 								{#if i === 0}
 									<span class="text-xs text-gray-400">current</span>
 								{:else}
-									<form method="POST" action="?/rollback" use:enhance={() => {
-										rollingBack = true;
-										return async ({ update }) => { await update({ reset: false }); rollingBack = false; };
-									}}>
+									<form method="POST" action="?/rollback" use:enhance={withLoadingFlag((v) => (rollingBack = v))}>
 										<input type="hidden" name="versionId" value={v.id} />
 										<input type="hidden" name="expectedUpdatedAt" value={data.experiment.updated_at ?? ''} />
 										<button type="submit" disabled={rollingBack}

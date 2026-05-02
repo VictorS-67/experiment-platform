@@ -30,7 +30,13 @@ export default defineConfig({
 	use: {
 		baseURL: process.env.E2E_BASE_URL ?? 'http://localhost:5173',
 		trace: 'on-first-retry',
-		screenshot: 'only-on-failure'
+		screenshot: 'only-on-failure',
+		// scripts/pw.js translates `--slowmo=N` (CLI-style) into PW_SLOWMO so
+		// you can run `npm run pw -- --headed --slowmo=200 tests/e2e/...`.
+		// Plain `playwright test` ignores this and runs at full speed.
+		launchOptions: {
+			slowMo: process.env.PW_SLOWMO ? Number(process.env.PW_SLOWMO) : 0
+		}
 	},
 	projects: [
 		{

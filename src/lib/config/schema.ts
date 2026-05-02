@@ -35,14 +35,19 @@ const LocalizedStringArray = z
 	.record(z.string(), z.array(z.string()))
 	.refine(localizedKeysOk, { message: localizedKeysMessage });
 
+// Shared `{ value, label }` option shape used by both registration fields and
+// response widgets. The two contexts are kept as aliases (FieldOption /
+// WidgetOption) so callers and exported types remain semantically named.
+const Option = z.object({
+	value: z.string(),
+	label: LocalizedString
+});
+
 // ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 
-const FieldOption = z.object({
-	value: z.string(),
-	label: LocalizedString
-});
+const FieldOption = Option;
 
 const FieldValidation = z.object({
 	min: z.number().optional(),
@@ -165,10 +170,7 @@ const TutorialConfig = z.object({
 // of that refactor; the remaining work is purely TypeScript ergonomics for
 // downstream code paths and is out of scope for the audit-remediation pass.
 
-const WidgetOption = z.object({
-	value: z.string(),
-	label: LocalizedString
-});
+const WidgetOption = Option;
 
 const WidgetConfig = z.object({
 	options: z.array(WidgetOption).optional(),
@@ -350,7 +352,8 @@ const StimulusItem = z.object({
 	url: z.string().optional(),
 	filename: z.string().optional(),
 	label: LocalizedString.optional(),
-	metadata: z.record(z.string(), StimulusMetadataValue).optional()
+	metadata: z.record(z.string(), StimulusMetadataValue).optional(),
+	isAnchor: z.boolean().optional()
 });
 
 const BlockConfig = z.object({
@@ -367,14 +370,20 @@ const ChunkConfig = z.object({
 });
 
 const BreakScreen = z.object({
-	title: LocalizedString,
-	body: LocalizedString,
-	duration: z.number().optional()
+	// Title + body are optional so the runtime can fall back to encouraging
+	// platform-default copy when the researcher doesn't customise.
+	title: LocalizedString.optional(),
+	body: LocalizedString.optional(),
+	duration: z.number().optional(),
+	// When true, suppress the break-screen modal entirely — used by researchers
+	// who explicitly do NOT want a forced pause at block boundaries.
+	disabled: z.boolean().optional()
 });
 
 const ChunkingConfig = z.object({
 	enabled: z.boolean().default(false),
 	chunks: z.array(ChunkConfig).default([]),
+	chunkOrder: z.enum(['sequential', 'latin-square', 'random-per-participant']).default('sequential'),
 	blockOrder: z.enum(['sequential', 'latin-square', 'random-per-participant']).default('sequential'),
 	withinBlockOrder: z.enum(['sequential', 'random', 'random-per-participant']).default('random-per-participant'),
 	breakScreen: BreakScreen.optional(),

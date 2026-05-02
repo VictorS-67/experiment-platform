@@ -1,5 +1,6 @@
 import type { PageServerLoad } from './$types';
-import { getParticipantByToken, loadResponses } from '$lib/server/data';
+import { getParticipantByToken, getParticipantIndex, loadResponses } from '$lib/server/data';
+import { resolveParticipantNextChunk } from '$lib/server/chunk-routing';
 import { redirect } from '@sveltejs/kit';
 import type { ExperimentConfig } from '$lib/config/schema';
 
@@ -20,6 +21,26 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 
 	// Load all responses for this participant
 	const allResponses = await loadResponses(experiment.id, participant.id);
+
+	// Defense-in-depth: if the participant lands on `/complete` while still
+	// having incomplete chunks (e.g. via a bookmark, manual URL, or post-bug
+	// redirect), bounce them back to their next-incomplete chunk in their
+	// resolved order. Same logic the login flow uses, so the participant ends
+	// up wherever `auth/+server.ts` would have sent them.
+	const chunking = config.stimuli?.chunking;
+	if (chunking?.enabled && chunking.chunks?.length) {
+		const participantIndex = await getParticipantIndex(experiment.id, participant.id);
+		const nextChunk = resolveParticipantNextChunk(
+			config,
+			allResponses,
+			slug,
+			participant.id,
+			participantIndex
+		);
+		if (nextChunk) {
+			redirect(302, nextChunk.url);
+		}
+	}
 
 	// Check for existing feedback submission
 	const existingFeedback = allResponses.find(

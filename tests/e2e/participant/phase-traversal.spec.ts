@@ -6,7 +6,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
  * P3 / P4 — stimulus-response phase traversal:
  *   - P3.2: missing required widget blocks save (user-visible error, no DB row)
  *   - P3.5: gatekeeper "No" with skipToNext=true hides widgets, advances,
- *           and stores `noResponseValue` in response_data
+ *           and stores JSON null per widget in response_data
  *   - P4.1: skipRule fires when triggering widget matches — target stimulus
  *           is auto-skipped and never surfaced in the nav
  */
@@ -74,13 +74,16 @@ test.describe('P3 / P4 traversal', () => {
 		expect(count ?? 0).toBe(0);
 	});
 
-	test('P3.5: gatekeeper No → widgets hidden, noResponseValue stored, auto-advance', async ({
+	test('P3.5: gatekeeper No → widgets hidden, JSON null per widget stored, auto-advance', async ({
 		page
 	}) => {
 		const email = `p35-${Date.now()}@example.com`;
 		await register(page, email);
 
-		// Click "No" — the gatekeeper posts silently with noResponseValue and advances.
+		// Click "No" — the gatekeeper posts silently with JSON null per widget
+		// and advances. (Pre-migration the value was the configurable
+		// `noResponseValue` per gatekeeper; that was dropped in the
+		// gatekeeper-restructure schema change — see migrate-configs-rules.ts.)
 		await page.locator('#gatekeeper-no').click();
 
 		// Wait for the save to commit. We observe the DB because the UI advances
@@ -106,9 +109,9 @@ test.describe('P3 / P4 traversal', () => {
 			.select('stimulus_id, response_data')
 			.eq('participant_id', participant!.id)
 			.single();
-		// First stimulus is s1; noResponseValue is 'never_seen' in the fixture.
+		// First stimulus is s1; gatekeeper No writes JSON null per widget.
 		expect(row!.stimulus_id).toBe('s1');
-		expect(row!.response_data).toMatchObject({ rating: 'never_seen' });
+		expect(row!.response_data).toMatchObject({ rating: null });
 	});
 
 	test('P4.1: skipRule (s1.rating=1 → skip s3) auto-writes a s3 skip row and keeps s3 out of the flow', async ({
@@ -130,7 +133,10 @@ test.describe('P3 / P4 traversal', () => {
 		// At this point the participant should see the completion modal for the
 		// phase (s3 was auto-skipped during advanceToNext). The skip rule writes
 		// a `_skipped_by_rule` response row for s3 server-side.
-		const nextPhaseBtn = page.getByRole('button', { name: /next phase|next/i }).last();
+		// Scope to dialog so we wait for the COMPLETION modal to render, not the
+		// NavStrip's "Next →" which is always visible (just disabled at the
+		// last item) and would falsely satisfy this assertion.
+		const nextPhaseBtn = page.getByRole('dialog').getByRole('button', { name: /next phase|next/i });
 		await expect(nextPhaseBtn).toBeVisible({ timeout: 6000 });
 
 		// DB: 3 rows for phase p1: s1 (rating=1), s2 (rating=3), s3 (auto-skip _skipped_by_rule).

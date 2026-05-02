@@ -8,6 +8,10 @@ export interface StimulusItemCandidate {
 	filename: string;
 	metadata?: Record<string, string>;
 	duplicate: boolean;
+	/** True when the filename was checked against storage and not found there. */
+	missingInStorage?: boolean;
+	/** True when an `isAnchor` column flagged this filename as a test-retest anchor. */
+	isAnchor?: boolean;
 }
 
 // --- Filename pattern → regex ---
@@ -167,16 +171,30 @@ export function buildStimulusItems(
 	options: {
 		patternRegex?: RegExp;
 		csvData?: Map<string, Record<string, string>>;
+		idByFilename?: Map<string, string>;
 		existingFilenames: Set<string>;
 		existingIds: Set<string>;
+		/** When provided, candidates whose filename isn't in the set get `missingInStorage = true`. */
+		storageFiles?: Set<string>;
+		/** Filenames flagged as test-retest anchors (from the CSV's `isAnchor` column). */
+		anchorFilenames?: Set<string>;
 	}
 ): StimulusItemCandidate[] {
-	const { patternRegex, csvData, existingFilenames, existingIds } = options;
+	const {
+		patternRegex,
+		csvData,
+		idByFilename,
+		existingFilenames,
+		existingIds,
+		storageFiles,
+		anchorFilenames
+	} = options;
 	const usedIds = new Set(existingIds);
 	const candidates: StimulusItemCandidate[] = [];
 
 	for (const filename of files) {
-		let id = filenameToId(filename);
+		const explicitId = idByFilename?.get(filename)?.trim();
+		let id = explicitId && explicitId.length > 0 ? explicitId : filenameToId(filename);
 
 		// Deduplicate IDs
 		if (usedIds.has(id)) {
@@ -202,12 +220,16 @@ export function buildStimulusItems(
 		}
 
 		const duplicate = existingFilenames.has(filename);
+		const missingInStorage = storageFiles ? !storageFiles.has(filename) : undefined;
+		const isAnchor = anchorFilenames?.has(filename) === true;
 
 		candidates.push({
 			id,
 			filename,
 			metadata: metadata && Object.keys(metadata).length > 0 ? metadata : undefined,
-			duplicate
+			duplicate,
+			...(missingInStorage !== undefined ? { missingInStorage } : {}),
+			...(isAnchor ? { isAnchor: true } : {})
 		});
 	}
 

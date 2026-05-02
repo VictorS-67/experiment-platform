@@ -45,7 +45,12 @@ When writing E2E specs OR briefing an agent to write them:
 1. **Test like a real admin or participant.** Click visible nav links, don't `page.goto('/admin/…')`. Fill fields by their on-screen label, not testids. If the real user would land on the list and click through, the spec does the same.
 2. **Verify through the UI, not the DB.** Setup + teardown can use the service-role client (faster, deterministic). But assertions that a feature works must read what a user would see — the list page, the toast, the rendered value. DB checks are supporting evidence on top, not a substitute.
 3. **Cover what a real user could actually do.** Beyond the happy path: rename, hit Cancel halfway, reload mid-edit, paste malformed JSON, invite yourself, open in two tabs.
-4. **Run headed when iterating.** `npx playwright test --headed --slowmo=200` for exploration; CI can run headless. If a page renders weirdly, you need to actually see it.
+4. **Run headed when iterating.** Three options, in order of usefulness:
+   - **Interactive UI** (best for stepping through): `npx playwright test --ui tests/e2e/...` — Playwright's official interactive runner with built-in step/replay/speed controls.
+   - **Continuous run at watchable speed**: `./scripts/pw.js --headed --slowmo=200 tests/e2e/...` (or `npm run pw -- --headed --slowmo=200 tests/e2e/...`). The `pw` wrapper translates `--slowmo=N` (which Playwright doesn't expose at the CLI) into the `launchOptions.slowMo` config option via the `PW_SLOWMO` env var.
+   - **Plain headed**: `npx playwright test --headed tests/e2e/...` — full speed, just visible.
+
+   CI runs headless. If a page renders weirdly, you need to actually see it.
 5. **Run `npm run check` and `npm run test` before claiming done.** Specs that pass at runtime can still ship TS errors that block CI.
 
 ## Architecture
@@ -77,6 +82,15 @@ When writing E2E specs OR briefing an agent to write them:
 | Phase page (main survey UI) | `src/routes/e/[slug]/[phaseSlug]/+page.svelte` |
 | Save endpoint | `src/routes/e/[slug]/[phaseSlug]/save/+server.ts` |
 | Admin config editor | `src/lib/components/admin/ConfigEditor.svelte` |
+| Response-save service (validation, audio upload, payload assembly) | `src/lib/services/response-save.ts` |
+| Phase-page leaf components | `src/lib/components/participant/{GatekeeperPrompt,BreakModal,BlockProgress}.svelte` |
+| Supabase result helper (`unwrap`, `unwrapVoid`) | `src/lib/server/db.ts` |
+| Toast composable + component | `src/lib/utils/toast.svelte.ts`, `src/lib/components/admin/Toast.svelte` |
+| `use:enhance` helpers (`preserveFields`, `withLoadingFlag`) | `src/lib/utils/enhance.ts` |
+| Admin display helpers (`configTitle`, `localized`, `STATUS_COLORS`, `participantName`) | `src/lib/utils/admin-display.ts` |
+| Admin date formatters (`formatDate`, `formatDateTime`) | `src/lib/utils/format-date.ts` |
+| Reusable admin components (FormInput, ConfirmationModal, AddButton, RemoveButton) | `src/lib/components/admin/` |
+| Storage script utility (`listAll`) | `scripts/storage-utils.js` |
 | E2E fixtures + helpers | `tests/e2e/fixtures.ts`, `tests/e2e/seed.ts` |
 
 ## Gotchas
@@ -144,6 +158,64 @@ In `gateMode === 'continue'`, `handleNo()` is synchronous — setting and cleari
 
 ### Local debugging with `sync-remote-to-local.js`
 `node scripts/sync-remote-to-local.js [--storage]` copies all remote data to local Supabase and creates a local admin (`debug@local.dev` / `Debug1234!`). Run `supabase start` first. The script always sets the `experiments` storage bucket to `public: true` — the bucket may have been created as private in a previous local session.
+
+### Sentinel `_`-prefix keys in `response_data` (Phase 8)
+Beyond user-defined widget keys, the `response_data` JSONB blob holds system metadata under `_`-prefixed keys: `_chunk` (current chunk slug, injected by the client at every chunked save), `_timestamp` (legacy). Consumer convention: use the helpers in [`src/lib/utils/response-data.ts`](src/lib/utils/response-data.ts) — `widgetEntries(rd)`, `widgetKeys(rd)`, `isAllNullResponse(rd)`. DO NOT hand-roll `Object.entries(rd).filter(...)` or `k !== '_timestamp'` — those are historical patterns that drifted out of sync across 7 sites before being consolidated. The save endpoint also uses `widgetKeys` to validate against widget IDs.
+
+### `chunkCompletion` is the canonical "is done in current chunk view?"
+After Phase 8, the phase page derives `chunkCompletion: Map<id, 'completed' | 'skipped'>` once. It's the source of truth for: progress bar count, StimulusNav button colors, block-info count, `gateMode`, `resetForCurrentItem`, first-incomplete landing, autoSkip duplicate-check, `checkCompletion` allDone test. For an anchor stimulus, only counts as done if a response with `_chunk === chunkSlug` exists.
+
+`responseStore.completedStimuli` retains a GLOBAL "any rating, any chunk" semantic — used only by callers that genuinely want global state (skip-rule evaluation, the `allowRevisit=false` revisit guard for non-anchor stimuli). DO NOT use `completedStimuli` for chunk-aware checks; reach for `chunkCompletion` instead.
+
+**Server-side equivalents**: when computing chunk completion in server code (`getChunkProgress` in `lib/server/admin.ts`, `resolveParticipantNextChunk` in `lib/server/chunk-routing.ts`), use the shared `isStimulusDoneInChunk(item, chunkSlug, responses)` helper from `lib/utils/response-data.ts` — same semantic as the client-side `chunkCompletion`. Same helper services the test-retest blinding `currentResponses` filter via `inScopeForChunk(...)`. **Strict on legacy data**: untagged anchor responses don't credit any chunk; the launch policy is "reset participants and re-run."
+
+### Per-participant chunk traversal — never `chunks[0]`
+Every chunk-aware code path that needs "the next chunk for this participant" goes through `resolveChunkOrder` (`src/lib/utils/index.ts`) or `resolveParticipantNextChunk` (`src/lib/server/chunk-routing.ts`). The raw `config.stimuli.chunking.chunks` array is only safe for: array-order checklist displays (admin chips), Zod parsing, the auto-generator output shape. Anywhere else, `chunks[0]` / `chunks[idx + 1]` is a bug — it ignores latin-square / random-per-participant rotation. Tutorial→survey redirect, phase-completion `nextChunkUrl`, admin "next chunk URL" link, and `/complete` page all go through the resolver.
+
+### `getNextResponseIndex(stimulusId)` for multi-chunk anchor saves
+Anchors recur across chunks; each rating creates a new `responses` row with incremented `response_index`. Hardcoding `responseIndex: 0` violates the `(participant_id, phase_id, stimulus_id, response_index)` unique constraint when an anchor gets skipped twice. Always pass `getNextResponseIndex(stimulusId)` — it returns `byStimulus.get(stimulusId).length` so each save gets a fresh index.
+
+### Anchor blinding in saved-responses card
+For test-retest reliability, the saved-responses card filters `currentResponses` to current-chunk-only when the stimulus is an anchor. Without this, prior-chunk anchor ratings would leak to the rater and bias their fresh judgment. Don't broaden this filter — the blinding is intentional.
+
+### Schema migration runbook
+Before merging any change to [src/lib/config/schema.ts](src/lib/config/schema.ts) that could invalidate stored configs (renaming a field, adding a required field without a default, tightening an enum, etc.), run the three-layer verification:
+
+1. **Layer 1 — local check against prod data**:
+   ```
+   npm run check-configs
+   ```
+   Reads every row in `experiments` (via `.env` Supabase creds), applies migration rules from [scripts/migrate-configs-rules.ts](scripts/migrate-configs-rules.ts), re-validates against the current Zod schema. Exit code 0 = clean; exit code 1 = at least one config can't be auto-migrated.
+
+2. **Layer 2 — CI fixture check** (always runs in CI):
+   ```
+   npm run check-configs:fixtures
+   ```
+   Same logic against `tests/fixtures/stored-configs.json` — a representative anonymized sample. Catches regressions against KNOWN config shapes without needing prod creds in CI.
+
+3. **Layer 3 — pre-deploy gate** (DEFERRED — see FUTURE_PLANS.md): would require Supabase service-role key in deploy-env secrets.
+
+If `check-configs` exits 1, triage:
+- **Option A**: add a migration rule in `scripts/migrate-configs-rules.ts` so the failing shape transforms into the new schema. Test the rule via `migrate-configs.test.ts`. Re-run `check-configs`. If clean, run `npm run migrate-configs:write` to apply.
+- **Option B**: write a one-shot SQL UPDATE migration for the affected experiment(s) in `supabase/migrations/`. Document in the migration's commit message which experiment(s) were touched and why.
+- **Option C**: reject the schema change. If too many configs would need manual fixes, the schema change is wrong (or premature).
+
+When prod gains a genuinely novel config shape (rare — quarterly), re-dump the fixture so Layer 2 keeps catching regressions: `tsx scripts/dump-fixture-from-prod.ts` (TODO: write this script when needed).
+
+### Admin UI is English-only by design
+All admin pages (login, experiment list, settings, config editor, data export, participants, etc.) intentionally use hardcoded English strings rather than going through `i18n.platform()`. Reasons: (a) admins are a tiny audience, (b) translating would also require a pre-login language toggle (the current toggle lives in `Header.svelte`, post-auth), (c) the bilingual surface that matters is the participant-facing experience. If a future admin needs JA, this is a deliberate scope decision to revisit, not an oversight to silently fix in passing. **Do not** wire `i18n.platform()` into admin pages without an explicit ask.
+
+### `unwrap()` / `unwrapVoid()` from `$lib/server/db.ts` is opt-in
+These helpers eliminate the `if (error) { console.error; throw }` boilerplate, but only for the canonical "must succeed and must return data" case. Sites that branch on `error.code` (e.g. `23505` unique-violation, `P0004` optimistic-lock conflict, `P0005` last-owner) MUST stay inline so they can map to user-facing messages or 409s. The `auth.admin.listUsers()` site also stays inline — its return type is a discriminated union that doesn't satisfy `unwrap`'s `T | null` contract. Best-effort callers (audit log, rate limiter) deliberately swallow errors and must NOT use `unwrap`.
+
+### `<Toast>` is single-toast-at-a-time by design
+The `ToastState` rune class in `$lib/utils/toast.svelte.ts` holds at most one active toast — a later `.show()` call replaces the previous one and resets the 3-second timer. Stacking, fixed positioning, and ARIA live regions are explicitly out of scope; adding any of them is a feature change, not a refactor. The 8 admin pages plus `CollaboratorsPanel` all share this single-toast contract.
+
+### `ConfirmationModal` magic phrase stays in English
+The phrase the user must type to confirm a destructive action ("delete experiment", "reset data", "delete user") is intentionally NOT localized. UX rationale: the obscurity is the safety mechanism — typing 削除 is too easy to do accidentally. If a future admin language is added, this phrase stays in English.
+
+### `parseStoredConfig()` defense-in-depth on every config read
+Every code path that returns config to downstream consumers (admin or participant) calls `parseStoredConfig()` first. This catches schema drift on JSONB reads — a config that was valid when saved but no longer parses under the current schema fails loudly rather than silently rendering broken UI. Don't try to "optimize" by skipping this.
 
 ## Credentials
 

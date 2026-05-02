@@ -67,11 +67,18 @@
 	});
 
 	function handleTutorialComplete() {
-		const chunking = config?.stimuli?.chunking;
+		// Server resolves the first-chunk URL respecting per-participant
+		// chunkOrder. For chunked experiments we MUST use that — no
+		// `chunks[0]` fallback (would silently misroute non-zero rotations).
+		// If the server didn't compute one in a chunked experiment (rare —
+		// would indicate a server-side bug), bounce to the landing page so
+		// the login flow re-resolves the destination.
 		const phaseSlug = firstPhase?.slug ?? 'survey';
-		const destination = chunking?.enabled && chunking.chunks?.length > 0
-			? `/e/${slug}/c/${chunking.chunks[0].slug}/${phaseSlug}`
-			: `/e/${slug}/${phaseSlug}`;
+		const serverFirst = (data as { firstChunkUrl?: string | null }).firstChunkUrl;
+		const chunking = config?.stimuli?.chunking;
+		const isChunked = chunking?.enabled && (chunking.chunks?.length ?? 0) > 0;
+		const destination = serverFirst
+			?? (isChunked ? `/e/${slug}` : `/e/${slug}/${phaseSlug}`);
 		goto(destination);
 	}
 

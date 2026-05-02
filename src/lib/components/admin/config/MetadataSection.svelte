@@ -1,5 +1,6 @@
 <script lang="ts">
 	import LocalizedInput from '../LocalizedInput.svelte';
+	import FormInput from '../FormInput.svelte';
 	import Field from './Field.svelte';
 	import { updatePath } from './helpers';
 	import type { ExperimentConfig } from '$lib/config/schema';
@@ -12,11 +13,10 @@
 <div class="space-y-4">
 	<div class="grid grid-cols-2 gap-4">
 		<Field label="Slug">
-			<input
-				type="text"
+			<FormInput
 				value={config.slug}
-				oninput={(e) => update(['slug'], e.currentTarget.value)}
-				class="w-full px-3 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent font-mono"
+				mono
+				oninput={(v) => update(['slug'], v)}
 			/>
 		</Field>
 		<Field label="Default Language">
@@ -33,15 +33,13 @@
 	</div>
 
 	<Field label="Languages" help="Comma-separated language codes">
-		<input
-			type="text"
+		<FormInput
 			value={languages.join(', ')}
-			oninput={(e) => {
-				const langs = e.currentTarget.value.split(',').map((s) => s.trim()).filter(Boolean);
+			placeholder="en, ja"
+			oninput={(v) => {
+				const langs = v.split(',').map((s) => s.trim()).filter(Boolean);
 				update(['metadata', 'languages'], langs);
 			}}
-			class="w-full px-3 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-			placeholder="en, ja"
 		/>
 	</Field>
 

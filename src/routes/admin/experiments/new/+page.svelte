@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { withLoadingFlag } from '$lib/utils/enhance';
 
 	let { form } = $props();
 	let loading = $state(false);
@@ -24,13 +25,7 @@
 
 	<form
 		method="POST"
-		use:enhance={() => {
-			loading = true;
-			return async ({ update }) => {
-				await update({ reset: false });
-				loading = false;
-			};
-		}}
+		use:enhance={withLoadingFlag((v) => (loading = v))}
 		class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 space-y-4"
 	>
 		<div>

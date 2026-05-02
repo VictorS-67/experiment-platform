@@ -32,7 +32,9 @@ export const GET: RequestHandler = async ({ locals, url, params }) => {
 	// experiment's audio uploads (= participant biometric PII filenames).
 	const exp = await getExperiment(params.id);
 	if (!exp) error(404, 'Experiment not found');
-	const configuredStimuliPath = (exp.config?.stimuli?.storagePath ?? '').replace(/\/+$/, '');
+	const configuredStimuliPath = (exp.config?.stimuli?.storagePath ?? '')
+		.replace(/\/+$/, '')
+		.replace(/^experiments\//, '');
 	const allowedPrefixes = [
 		`audio/${params.id}`,
 		...(configuredStimuliPath ? [configuredStimuliPath] : [])
@@ -42,19 +44,43 @@ export const GET: RequestHandler = async ({ locals, url, params }) => {
 	);
 	if (!isAllowed) error(403, 'Path not within this experiment');
 
+	// Default fast path returns 200 files. `all=true` paginates the full folder
+	// (capped at 5000 to bound work). Used by the bulk import modal to cross-check
+	// CSV filenames against actual storage contents before import.
 	const supabase = getServerSupabase();
-	const { data, error: storageError } = await supabase.storage
-		.from('experiments')
-		.list(listPath, { limit: 200, sortBy: { column: 'name', order: 'asc' } });
+	const all = url.searchParams.get('all') === 'true';
+	const PAGE = 1000;
+	const HARD_CAP = 5000;
+	const files: string[] = [];
+	let offset = 0;
+	let truncated = false;
 
-	if (storageError) {
-		console.error('Storage check error:', storageError);
-		return json({ count: 0, files: [], error: 'Could not read storage path' });
+	while (true) {
+		const { data, error: storageError } = await supabase.storage
+			.from('experiments')
+			.list(listPath, {
+				limit: all ? PAGE : 200,
+				offset: all ? offset : 0,
+				sortBy: { column: 'name', order: 'asc' }
+			});
+
+		if (storageError) {
+			console.error('Storage check error:', storageError);
+			return json({ count: 0, files: [], error: 'Could not read storage path' });
+		}
+
+		const batch = (data ?? [])
+			.filter((f) => f.name !== '.emptyFolderPlaceholder')
+			.map((f) => f.name);
+		files.push(...batch);
+
+		if (!all || batch.length < PAGE) break;
+		offset += PAGE;
+		if (offset >= HARD_CAP) {
+			truncated = true;
+			break;
+		}
 	}
 
-	const files = (data ?? [])
-		.filter((f) => f.name !== '.emptyFolderPlaceholder')
-		.map((f) => f.name);
-
-	return json({ count: files.length, files });
+	return json({ count: files.length, files, ...(truncated ? { truncated: true } : {}) });
 };

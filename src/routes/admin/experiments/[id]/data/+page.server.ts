@@ -9,13 +9,15 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	const experiment = await getExperiment(params.id);
 	if (!experiment) error(404, 'Experiment not found');
 
-	const chunking = (experiment.config as { stimuli?: { chunking?: { enabled?: boolean; chunks?: Array<{ slug: string; blocks: Array<{ stimulusIds: string[] }> }>; minBreakMinutes?: number } } }).stimuli?.chunking;
+	const stimuliCfg = (experiment.config as { stimuli?: { chunking?: { enabled?: boolean; chunks?: Array<{ slug: string; blocks: Array<{ stimulusIds: string[] }> }>; minBreakMinutes?: number; chunkOrder?: 'sequential' | 'latin-square' | 'random-per-participant' }; items?: Array<{ id: string; isAnchor?: boolean }> } }).stimuli;
+	const chunking = stimuliCfg?.chunking;
+	const stimulusItems = stimuliCfg?.items;
 
 	const [participants, stats, chunkProgressMap] = await Promise.all([
 		getParticipants(params.id),
 		getExperimentStats(params.id),
 		chunking?.enabled && chunking.chunks?.length
-			? getChunkProgress(params.id, chunking.chunks, chunking.minBreakMinutes)
+			? getChunkProgress(params.id, chunking.chunks, chunking.minBreakMinutes, chunking.chunkOrder, stimulusItems)
 			: Promise.resolve(null)
 	]);
 

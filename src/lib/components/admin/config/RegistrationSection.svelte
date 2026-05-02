@@ -1,5 +1,7 @@
 <script lang="ts">
 	import LocalizedInput from '../LocalizedInput.svelte';
+	import FormInput from '../FormInput.svelte';
+	import AddButton from '../AddButton.svelte';
 	import Field from './Field.svelte';
 	import { updatePath, fieldTypes } from './helpers';
 	import type { ExperimentConfig } from '$lib/config/schema';
@@ -70,11 +72,10 @@
 			</div>
 			<div class="grid grid-cols-3 gap-3">
 				<Field label="ID">
-					<input
-						type="text"
+					<FormInput
 						value={field.id}
-						oninput={(e) => update(['registration', 'fields', String(i), 'id'], e.currentTarget.value)}
-						class="w-full px-2 py-1 border border-gray-300 rounded text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+						mono
+						oninput={(v) => update(['registration', 'fields', String(i), 'id'], v)}
 					/>
 				</Field>
 				<Field label="Type">
@@ -102,12 +103,10 @@
 			<LocalizedInput label="Label" value={field.label} {languages} onchange={(v) => update(['registration', 'fields', String(i), 'label'], v)} />
 			<LocalizedInput label="Placeholder" value={field.placeholder ?? {}} {languages} onchange={(v) => update(['registration', 'fields', String(i), 'placeholder'], Object.values(v).some(Boolean) ? v : undefined)} />
 			<Field label="Default Value">
-				<input
-					type="text"
+				<FormInput
 					value={field.defaultValue ?? ''}
-					oninput={(e) => update(['registration', 'fields', String(i), 'defaultValue'], e.currentTarget.value || undefined)}
-					class="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
 					placeholder="Pre-filled value (optional)"
+					oninput={(v) => update(['registration', 'fields', String(i), 'defaultValue'], v || undefined)}
 				/>
 			</Field>
 			<!-- Validation config -->
@@ -117,7 +116,7 @@
 					{#if field.validation}
 						<button type="button" onclick={() => { delete config.registration.fields[i].validation; }} class="text-xs text-red-500 hover:text-red-700 cursor-pointer">Remove</button>
 					{:else}
-						<button type="button" onclick={() => { config.registration.fields[i].validation = { errorMessage: Object.fromEntries(languages.map((l) => [l, ''])) }; }} class="text-xs px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100 cursor-pointer">+ Add</button>
+						<AddButton onclick={() => { config.registration.fields[i].validation = { errorMessage: Object.fromEntries(languages.map((l) => [l, ''])) }; }} />
 					{/if}
 				</div>
 				{#if field.validation}
@@ -125,21 +124,19 @@
 						{#if field.type === 'number'}
 							<div class="grid grid-cols-2 gap-2">
 								<Field label="Min">
-									<input type="number" value={field.validation.min ?? ''}
-										oninput={(e) => update(['registration', 'fields', String(i), 'validation', 'min'], e.currentTarget.value ? e.currentTarget.valueAsNumber : undefined)}
-										class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+									<FormInput type="number" size="xs" value={field.validation.min ?? ''}
+										oninput={(v) => update(['registration', 'fields', String(i), 'validation', 'min'], v ? Number(v) : undefined)} />
 								</Field>
 								<Field label="Max">
-									<input type="number" value={field.validation.max ?? ''}
-										oninput={(e) => update(['registration', 'fields', String(i), 'validation', 'max'], e.currentTarget.value ? e.currentTarget.valueAsNumber : undefined)}
-										class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+									<FormInput type="number" size="xs" value={field.validation.max ?? ''}
+										oninput={(v) => update(['registration', 'fields', String(i), 'validation', 'max'], v ? Number(v) : undefined)} />
 								</Field>
 							</div>
 						{:else}
 							<Field label="Pattern (regex)">
-								<input type="text" value={field.validation.pattern ?? ''}
-									oninput={(e) => update(['registration', 'fields', String(i), 'validation', 'pattern'], e.currentTarget.value || undefined)}
-									class="w-full px-2 py-1 border border-gray-300 rounded text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="^[A-Za-z]+$" />
+								<FormInput size="xs" mono value={field.validation.pattern ?? ''}
+									placeholder="^[A-Za-z]+$"
+									oninput={(v) => update(['registration', 'fields', String(i), 'validation', 'pattern'], v || undefined)} />
 							</Field>
 						{/if}
 						<LocalizedInput label="Error message" value={field.validation.errorMessage ?? {}} {languages} onchange={(v) => update(['registration', 'fields', String(i), 'validation', 'errorMessage'], v)} />
@@ -152,21 +149,23 @@
 				<div class="border-t border-gray-100 pt-2 mt-2">
 					<div class="flex items-center justify-between mb-1">
 						<span class="text-xs text-gray-500">Options ({field.options?.length ?? 0})</span>
-						<button type="button" onclick={() => addFieldOption(i)} class="text-xs px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100 cursor-pointer">+ Add</button>
+						<AddButton onclick={() => addFieldOption(i)} />
 					</div>
 					{#if field.type === 'select-or-other'}
 						<p class="text-xs text-gray-400 mb-1">These are the fixed options. An "Other" entry is added automatically at the end.</p>
 					{/if}
 					{#each field.options ?? [] as option, oi}
 						<div class="flex items-start gap-2 mb-1">
-							<input
-								type="text"
-								value={option.value}
-								oninput={(e) => update(['registration', 'fields', String(i), 'options', String(oi), 'value'], e.currentTarget.value)}
-								aria-label="Option value"
-								class="w-24 shrink-0 px-2 py-1 border border-gray-300 rounded text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
-								placeholder="value"
-							/>
+							<div class="w-24 shrink-0">
+								<FormInput
+									size="xs"
+									mono
+									value={option.value}
+									aria-label="Option value"
+									placeholder="value"
+									oninput={(v) => update(['registration', 'fields', String(i), 'options', String(oi), 'value'], v)}
+								/>
+							</div>
 							<div class="flex-1">
 								<LocalizedInput label="" value={option.label} {languages} onchange={(v) => update(['registration', 'fields', String(i), 'options', String(oi), 'label'], v)} />
 							</div>
@@ -202,7 +201,7 @@
 					{#if field.conditionalOn}
 						<button type="button" onclick={() => { delete config.registration.fields[i].conditionalOn; }} class="text-xs text-red-500 hover:text-red-700 cursor-pointer">Remove</button>
 					{:else}
-						<button type="button" onclick={() => { config.registration.fields[i].conditionalOn = { field: '', value: '' }; }} class="text-xs px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100 cursor-pointer">+ Add</button>
+						<AddButton onclick={() => { config.registration.fields[i].conditionalOn = { field: '', value: '' }; }} />
 					{/if}
 				</div>
 				{#if field.conditionalOn}
@@ -221,14 +220,16 @@
 								{/each}
 							</select>
 							<span class="text-xs text-gray-400">=</span>
-							<input
-								type="text"
-								value={field.conditionalOn.value}
-								oninput={(e) => update(['registration', 'fields', String(i), 'conditionalOn', 'value'], e.currentTarget.value)}
-								aria-label="Value that triggers visibility"
-								class="flex-1 px-2 py-1 border border-gray-300 rounded text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
-								placeholder="option value"
-							/>
+							<div class="flex-1">
+								<FormInput
+									size="xs"
+									mono
+									value={field.conditionalOn.value}
+									aria-label="Value that triggers visibility"
+									placeholder="option value"
+									oninput={(v) => update(['registration', 'fields', String(i), 'conditionalOn', 'value'], v)}
+								/>
+							</div>
 						</div>
 					</div>
 				{/if}

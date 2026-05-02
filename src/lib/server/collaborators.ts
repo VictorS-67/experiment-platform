@@ -1,5 +1,6 @@
 import { error } from '@sveltejs/kit';
 import { getServerSupabase } from './supabase';
+import { unwrap, unwrapVoid } from './db';
 
 export type CollaboratorRole = 'owner' | 'editor' | 'viewer';
 
@@ -66,32 +67,32 @@ export async function requireExperimentAccess(
 /** List the experiment IDs this admin can access at any role. */
 export async function listAccessibleExperimentIds(adminUserId: string): Promise<string[]> {
 	const supabase = getServerSupabase();
-	const { data, error: dbErr } = await supabase
-		.from('experiment_collaborators')
-		.select('experiment_id')
-		.eq('user_id', adminUserId);
-	if (dbErr) {
-		console.error('Failed to list accessible experiments:', dbErr);
-		throw new Error('Failed to list accessible experiments');
-	}
-	return (data ?? []).map((r) => r.experiment_id as string);
+	const data = unwrap(
+		await supabase
+			.from('experiment_collaborators')
+			.select('experiment_id')
+			.eq('user_id', adminUserId),
+		'Failed to list accessible experiments'
+	);
+	return data.map((r) => r.experiment_id as string);
 }
 
 /** All collaborators on an experiment, joined with auth.users for email. */
 export async function listCollaborators(experimentId: string): Promise<Collaborator[]> {
 	const supabase = getServerSupabase();
-	const { data, error: dbErr } = await supabase
-		.from('experiment_collaborators')
-		.select('user_id, role, added_at')
-		.eq('experiment_id', experimentId)
-		.order('added_at', { ascending: true });
-	if (dbErr) {
-		console.error('Failed to list collaborators:', dbErr);
-		throw new Error('Failed to list collaborators');
-	}
-	if (!data?.length) return [];
+	const data = unwrap(
+		await supabase
+			.from('experiment_collaborators')
+			.select('user_id, role, added_at')
+			.eq('experiment_id', experimentId)
+			.order('added_at', { ascending: true }),
+		'Failed to list collaborators'
+	);
+	if (!data.length) return [];
 
 	const userIds = data.map((r) => r.user_id as string);
+	// supabase.auth.admin.listUsers() returns a discriminated union (different
+	// `data` shape on error) that doesn't satisfy unwrap's `T | null` contract.
 	const { data: users, error: usersErr } = await supabase.auth.admin.listUsers({ perPage: 1000 });
 	if (usersErr) {
 		console.error('Failed to load auth users:', usersErr);
@@ -112,18 +113,17 @@ export async function listCollaborators(experimentId: string): Promise<Collabora
 /** Pending (unclaimed, unexpired) invites for an experiment. */
 export async function listPendingInvites(experimentId: string): Promise<PendingInvite[]> {
 	const supabase = getServerSupabase();
-	const { data, error: dbErr } = await supabase
-		.from('pending_invites')
-		.select('id, email, role, claim_token, invited_at, expires_at')
-		.eq('experiment_id', experimentId)
-		.is('claimed_at', null)
-		.gt('expires_at', new Date().toISOString())
-		.order('invited_at', { ascending: false });
-	if (dbErr) {
-		console.error('Failed to list pending invites:', dbErr);
-		throw new Error('Failed to list pending invites');
-	}
-	return (data ?? []).map((r) => ({
+	const data = unwrap(
+		await supabase
+			.from('pending_invites')
+			.select('id, email, role, claim_token, invited_at, expires_at')
+			.eq('experiment_id', experimentId)
+			.is('claimed_at', null)
+			.gt('expires_at', new Date().toISOString())
+			.order('invited_at', { ascending: false }),
+		'Failed to list pending invites'
+	);
+	return data.map((r) => ({
 		id: r.id as string,
 		email: r.email as string,
 		role: r.role as CollaboratorRole,
@@ -180,16 +180,15 @@ export async function addCollaboratorByUserId(
 	addedBy: string
 ): Promise<void> {
 	const supabase = getServerSupabase();
-	const { error: dbErr } = await supabase
-		.from('experiment_collaborators')
-		.upsert(
-			{ experiment_id: experimentId, user_id: userId, role, added_by: addedBy },
-			{ onConflict: 'experiment_id,user_id' }
-		);
-	if (dbErr) {
-		console.error('Failed to add collaborator:', dbErr);
-		throw new Error('Failed to add collaborator');
-	}
+	unwrapVoid(
+		await supabase
+			.from('experiment_collaborators')
+			.upsert(
+				{ experiment_id: experimentId, user_id: userId, role, added_by: addedBy },
+				{ onConflict: 'experiment_id,user_id' }
+			),
+		'Failed to add collaborator'
+	);
 }
 
 const INVITE_TTL_DAYS = 14;
@@ -250,23 +249,22 @@ export async function inviteCollaboratorByEmail(
 	const claimToken = crypto.randomUUID();
 	const expiresAt = new Date(Date.now() + INVITE_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString();
 
-	const { error: dbErr } = await supabase.from('pending_invites').upsert(
-		{
-			experiment_id: experimentId,
-			email,
-			role,
-			claim_token: claimToken,
-			invited_by: invitedBy,
-			invited_at: new Date().toISOString(),
-			expires_at: expiresAt,
-			claimed_at: null
-		},
-		{ onConflict: 'experiment_id,email' }
+	unwrapVoid(
+		await supabase.from('pending_invites').upsert(
+			{
+				experiment_id: experimentId,
+				email,
+				role,
+				claim_token: claimToken,
+				invited_by: invitedBy,
+				invited_at: new Date().toISOString(),
+				expires_at: expiresAt,
+				claimed_at: null
+			},
+			{ onConflict: 'experiment_id,email' }
+		),
+		'Failed to create pending invite'
 	);
-	if (dbErr) {
-		console.error('Failed to create pending invite:', dbErr);
-		throw new Error('Failed to create pending invite');
-	}
 
 	const claimUrl = `${origin}/admin/login?claim=${encodeURIComponent(claimToken)}`;
 
@@ -301,16 +299,15 @@ export async function revokePendingInvite(experimentId: string, inviteId: string
 	// UUIDs today, but binding the query to the gate's experiment closes the
 	// gap unconditionally.
 	const supabase = getServerSupabase();
-	const { error: dbErr } = await supabase
-		.from('pending_invites')
-		.delete()
-		.eq('id', inviteId)
-		.eq('experiment_id', experimentId)
-		.is('claimed_at', null);
-	if (dbErr) {
-		console.error('Failed to revoke invite:', dbErr);
-		throw new Error('Failed to revoke invite');
-	}
+	unwrapVoid(
+		await supabase
+			.from('pending_invites')
+			.delete()
+			.eq('id', inviteId)
+			.eq('experiment_id', experimentId)
+			.is('claimed_at', null),
+		'Failed to revoke invite'
+	);
 }
 
 /**

@@ -1,4 +1,5 @@
 import type { ResponseRecord } from '$lib/services/data';
+import { isAllNullResponse } from '$lib/utils/response-data';
 
 class ResponseStore {
 	list = $state<ResponseRecord[]>([]);
@@ -11,18 +12,21 @@ class ResponseStore {
 		this.currentPhaseId = '';
 	}
 
+	/**
+	 * GLOBAL "ever responded to" map — keyed by `stimulus_id` regardless of
+	 * which chunk a response was made in. Useful for callers that legitimately
+	 * want global state (e.g. skip-rule evaluation, revisit-prevention guards).
+	 *
+	 * For chunk-aware completion (StimulusNav button colors, progress bars,
+	 * gatekeeper logic on stimuli that recur across chunks like anchors),
+	 * derive a `chunkCompletion` Map at the page level instead — see the
+	 * phase page for the canonical pattern.
+	 */
 	get completedStimuli(): Map<string, 'completed' | 'skipped'> {
 		const completed = new Map<string, 'completed' | 'skipped'>();
 		for (const r of this.list) {
-			// Check all widget values (excluding _timestamp metadata) to determine status
-			const widgetEntries = Object.entries(r.response_data).filter(([k]) => k !== '_timestamp');
-			const allNull = widgetEntries.length > 0 &&
-				widgetEntries.every(([, v]) => v === null || v === 'null');
-
-			if (allNull) {
-				if (!completed.has(r.stimulus_id)) {
-					completed.set(r.stimulus_id, 'skipped');
-				}
+			if (isAllNullResponse(r.response_data)) {
+				if (!completed.has(r.stimulus_id)) completed.set(r.stimulus_id, 'skipped');
 			} else {
 				completed.set(r.stimulus_id, 'completed');
 			}

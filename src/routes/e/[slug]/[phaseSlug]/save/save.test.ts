@@ -157,6 +157,23 @@ describe('POST /e/[slug]/[phaseSlug]/save', () => {
 		expect(res.body.message).toContain('Unknown widget: unknown');
 	});
 
+	it('accepts `_`-prefixed sentinel keys (`_chunk`, `_timestamp`) without widget-validation rejection', async () => {
+		const res = await callPOST(
+			makeEvent({
+				phaseId: 'phase-sr',
+				stimulusId: 'stim-1',
+				responseData: { w1: 'hello', _chunk: 'chunk-2', _timestamp: '2026-05-01T12:00:00Z' }
+			})
+		);
+		expect(res.status).toBe(200);
+		expect(savedResponses).toHaveLength(1);
+		expect(savedResponses[0].response_data).toMatchObject({
+			w1: 'hello',
+			_chunk: 'chunk-2',
+			_timestamp: '2026-05-01T12:00:00Z'
+		});
+	});
+
 	it('saves a valid stimulus-response submission', async () => {
 		const res = await callPOST(makeEvent({ phaseId: 'phase-sr', stimulusId: 'stim-2', responseData: { w1: 'hello', w2: 'world' } }));
 		expect(res.status).toBe(200);

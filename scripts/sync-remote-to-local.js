@@ -24,6 +24,7 @@ import { config as loadEnv, parse as parseEnv } from 'dotenv';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { readFileSync } from 'fs';
+import { listAll } from './storage-utils.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
@@ -258,24 +259,7 @@ async function syncStorageBucket() {
 		if (updateErr) throw new Error(`updateBucket: ${updateErr.message}`);
 	}
 
-	// Recursively list all files in the remote bucket
-	async function listAll(prefix = '') {
-		const { data, error } = await remote.storage.from(BUCKET).list(prefix, { limit: 1000 });
-		if (error) throw new Error(`storage.list("${prefix}"): ${error.message}`);
-		const files = [];
-		for (const item of data ?? []) {
-			const path = prefix ? `${prefix}/${item.name}` : item.name;
-			if (item.id) {
-				// item.id is non-null for files, null for folders
-				files.push(path);
-			} else {
-				files.push(...(await listAll(path)));
-			}
-		}
-		return files;
-	}
-
-	const files = await listAll();
+	const files = await listAll(remote, BUCKET);
 	console.log(`  Found ${files.length} files`);
 
 	let copied = 0;

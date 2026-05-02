@@ -2,6 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { getParticipantByToken, saveResponse } from '$lib/server/data';
 import { getServerSupabase } from '$lib/server/supabase';
+import { widgetKeys } from '$lib/utils/response-data';
 
 export const POST: RequestHandler = async ({ request, locals, params }) => {
 	if (!locals.sessionToken) {
@@ -55,7 +56,7 @@ export const POST: RequestHandler = async ({ request, locals, params }) => {
 			? (phase.reviewConfig?.responseWidgets ?? [])
 			: (phase.responseWidgets ?? []);
 	const widgetIds = new Set(phaseWidgets.map((w) => w.id));
-	for (const key of Object.keys(responseData as Record<string, unknown>)) {
+	for (const key of widgetKeys(responseData as Record<string, unknown>)) {
 		if (!widgetIds.has(key)) {
 			error(400, `Unknown widget: ${key}`);
 		}

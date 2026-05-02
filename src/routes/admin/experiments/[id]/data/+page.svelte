@@ -1,5 +1,10 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import Toast from '$lib/components/admin/Toast.svelte';
+	import { ToastState } from '$lib/utils/toast.svelte';
+	import { withLoadingFlag } from '$lib/utils/enhance';
+	import { configTitle, participantName } from '$lib/utils/admin-display';
+	import { formatDateTime } from '$lib/utils/format-date';
 
 	let { data, form } = $props();
 
@@ -15,16 +20,14 @@
 	let selectedIds = $state<Set<string>>(new Set());
 	let bulkDeleting = $state(false);
 
-	let toast = $state<{ type: 'success' | 'error'; message: string } | null>(null);
+	const toast = new ToastState();
 
 	$effect(() => {
 		if (form?.success) {
 			selectedIds = new Set();
-			toast = { type: 'success', message: 'Deleted successfully.' };
-			setTimeout(() => (toast = null), 3000);
+			toast.show('success', 'Deleted successfully.');
 		} else if (form?.error) {
-			toast = { type: 'error', message: form.error };
-			setTimeout(() => (toast = null), 4000);
+			toast.show('error', form.error, 4000);
 		}
 	});
 
@@ -45,23 +48,6 @@
 
 	let allSelected = $derived(data.participants.length > 0 && selectedIds.size === data.participants.length);
 
-	function getTitle(config: Record<string, unknown>): string {
-		const meta = config?.metadata as Record<string, unknown> | undefined;
-		const title = meta?.title as Record<string, string> | undefined;
-		return title?.en || title?.ja || Object.values(title || {})[0] || 'Untitled';
-	}
-
-	function formatDate(dateStr: string): string {
-		return new Date(dateStr).toLocaleString('en-US', {
-			year: 'numeric', month: 'short', day: 'numeric',
-			hour: '2-digit', minute: '2-digit'
-		});
-	}
-
-	function getName(registrationData: Record<string, unknown> | null): string {
-		if (!registrationData) return '—';
-		return (registrationData.name as string) || '—';
-	}
 
 	// Chunking config + per-participant chunk progress
 	let configChunks = $derived(() => {
@@ -70,36 +56,39 @@
 		return chunking?.enabled ? (chunking.chunks ?? []) : [];
 	});
 
-	function getParticipantChunkProgress(participantId: string) {
+	type ChunkProgressEntry = { slug: string; complete: boolean; respondedCount: number; totalCount: number; completedAt: string | null };
+	type ChunkProgressResult = {
+		progress: ChunkProgressEntry[];
+		nextChunk: { slug: string; canStartAt: string | null } | null;
+	};
+
+	function getParticipantChunkProgress(participantId: string): ChunkProgressResult | null {
 		if (!data.chunkProgress) return null;
-		return (data.chunkProgress as Record<string, Array<{ slug: string; complete: boolean; respondedCount: number; totalCount: number; completedAt: string | null; canStartNextAt: string | null }>>)[participantId] ?? null;
+		return (data.chunkProgress as Record<string, ChunkProgressResult>)[participantId] ?? null;
 	}
 
 	function getNextChunkUrl(participantId: string): string | null {
+		// Reads `nextChunk.slug` resolved server-side per-participant order —
+		// no array-walk client-side. Pre-fix this used `chunks.find((c, i) =>
+		// !progress[i]?.complete)` which assumed array-order traversal and
+		// surfaced wrong URLs for latin-square / random-per-participant.
 		const cfg = data.experiment.config as Record<string, unknown>;
-		const chunking = (cfg?.stimuli as Record<string, unknown>)?.chunking as { chunks?: Array<{ slug: string }> } | undefined;
 		const phases = cfg?.phases as Array<{ slug: string }> | undefined;
 		const firstPhaseSlug = phases?.[0]?.slug ?? 'survey';
-		const progress = getParticipantChunkProgress(participantId);
-		if (!progress || !chunking?.chunks) return null;
-		const nextChunk = chunking.chunks.find((c, i) => !progress[i]?.complete);
-		return nextChunk ? `/e/${data.experiment.slug}/c/${nextChunk.slug}/${firstPhaseSlug}` : null;
+		const result = getParticipantChunkProgress(participantId);
+		if (!result?.nextChunk) return null;
+		return `/e/${data.experiment.slug}/c/${result.nextChunk.slug}/${firstPhaseSlug}`;
 	}
 
 	function isBreakRequired(participantId: string): boolean {
-		const progress = getParticipantChunkProgress(participantId);
-		if (!progress) return false;
-		const nextIdx = progress.findIndex(c => !c.complete);
-		if (nextIdx <= 0) return false;
-		const canStartAt = progress[nextIdx]?.canStartNextAt;
+		const result = getParticipantChunkProgress(participantId);
+		const canStartAt = result?.nextChunk?.canStartAt;
 		return !!canStartAt && new Date(canStartAt) > new Date();
 	}
 
 	function formatBreakTime(participantId: string): string {
-		const progress = getParticipantChunkProgress(participantId);
-		if (!progress) return '';
-		const nextIdx = progress.findIndex(c => !c.complete);
-		const canStartAt = progress[nextIdx]?.canStartNextAt;
+		const result = getParticipantChunkProgress(participantId);
+		const canStartAt = result?.nextChunk?.canStartAt;
 		if (!canStartAt) return '';
 		return new Date(canStartAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 	}
@@ -132,7 +121,7 @@
 </script>
 
 <svelte:head>
-	<title>Data - {getTitle(data.experiment.config)} - Admin</title>
+	<title>Data - {configTitle(data.experiment.config)} - Admin</title>
 </svelte:head>
 
 <div class="p-8">
@@ -142,7 +131,7 @@
 
 	<div class="flex items-center justify-between mb-6">
 		<div>
-			<h1 class="text-2xl font-semibold text-gray-800">{getTitle(data.experiment.config)}</h1>
+			<h1 class="text-2xl font-semibold text-gray-800">{configTitle(data.experiment.config)}</h1>
 			<p class="text-sm text-gray-500 mt-1">Participant data &amp; export</p>
 		</div>
 		<div class="relative">
@@ -207,11 +196,7 @@
 		</div>
 	</div>
 
-	{#if toast}
-		<div class="mb-4 p-3 rounded text-sm {toast.type === 'success' ? 'bg-green-50 border border-green-200 text-green-700' : 'bg-red-50 border border-red-200 text-red-700'}">
-			{toast.message}
-		</div>
-	{/if}
+	<Toast toast={toast.current} />
 
 	<!-- Stats Panel -->
 	{#if data.participants.length > 0}
@@ -285,7 +270,7 @@
 									{p.email}
 								</a>
 							</td>
-							<td class="px-4 py-3 text-gray-600">{getName(p.registration_data)}</td>
+							<td class="px-4 py-3 text-gray-600">{participantName(p.registration_data)}</td>
 							<td class="px-4 py-3 text-gray-600">{p.responseCount}</td>
 							{#if configChunks().length > 0}
 								{@const progress = getParticipantChunkProgress(p.id)}
@@ -294,7 +279,7 @@
 								<td class="px-4 py-3">
 									<div class="flex items-center gap-1 flex-wrap">
 										{#each configChunks() as chunk, i}
-											{@const cp = progress?.[i]}
+											{@const cp = progress?.progress[i]}
 											<span class="text-xs px-1.5 py-0.5 rounded font-mono {cp?.complete ? 'bg-green-100 text-green-700' : cp && cp.respondedCount > 0 ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-100 text-gray-400'}">
 												{chunk.slug} {#if cp?.complete}✓{:else if cp && cp.respondedCount > 0}{cp.respondedCount}/{cp.totalCount}{:else}–{/if}
 											</span>
@@ -312,7 +297,7 @@
 									{/if}
 								</td>
 							{/if}
-							<td class="px-4 py-3 text-gray-500">{formatDate(p.registered_at)}</td>
+							<td class="px-4 py-3 text-gray-500">{formatDateTime(p.registered_at)}</td>
 						</tr>
 					{/each}
 				</tbody>
@@ -325,10 +310,7 @@
 {#if selectedIds.size > 0}
 	<div class="fixed bottom-6 left-1/2 -translate-x-1/2 bg-gray-800 text-white rounded-lg shadow-xl px-6 py-3 flex items-center gap-4 z-50">
 		<span class="text-sm">{selectedIds.size} selected</span>
-		<form method="POST" action="?/bulkDelete" use:enhance={() => {
-			bulkDeleting = true;
-			return async ({ update }) => { await update({ reset: false }); bulkDeleting = false; };
-		}}>
+		<form method="POST" action="?/bulkDelete" use:enhance={withLoadingFlag((v) => (bulkDeleting = v))}>
 			{#each [...selectedIds] as id}
 				<input type="hidden" name="participantIds" value={id} />
 			{/each}

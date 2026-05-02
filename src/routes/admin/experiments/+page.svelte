@@ -1,26 +1,9 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { localizedTitle, STATUS_COLORS, type ExperimentStatus } from '$lib/utils/admin-display';
+	import { formatDate } from '$lib/utils/format-date';
 
 	let { data } = $props();
-
-	const statusColors: Record<string, string> = {
-		draft: 'bg-gray-100 text-gray-700',
-		active: 'bg-green-100 text-green-700',
-		paused: 'bg-yellow-100 text-yellow-700',
-		archived: 'bg-red-100 text-red-700'
-	};
-
-	function getTitle(title: Record<string, string>): string {
-		return title?.en || title?.ja || Object.values(title || {})[0] || 'Untitled';
-	}
-
-	function formatDate(dateStr: string): string {
-		return new Date(dateStr).toLocaleDateString('en-US', {
-			year: 'numeric',
-			month: 'short',
-			day: 'numeric'
-		});
-	}
 </script>
 
 <svelte:head>
@@ -60,13 +43,13 @@
 					{#each data.experiments as exp}
 						<tr class="hover:bg-gray-50">
 							<td class="px-4 py-3 font-medium text-gray-800">
-								{getTitle(exp.title)}
+								{localizedTitle(exp.title)}
 							</td>
 							<td class="px-4 py-3 text-gray-500">
 								<code class="bg-gray-100 px-1.5 py-0.5 rounded text-xs">{exp.slug}</code>
 							</td>
 							<td class="px-4 py-3">
-								<span class="px-2 py-0.5 rounded-full text-xs font-medium {statusColors[exp.status] || 'bg-gray-100 text-gray-700'}">
+								<span class="px-2 py-0.5 rounded-full text-xs font-medium {STATUS_COLORS[exp.status as ExperimentStatus] ?? 'bg-gray-100 text-gray-700'}">
 									{exp.status}
 								</span>
 							</td>

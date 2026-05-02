@@ -273,4 +273,70 @@ describe('buildStimulusItems', () => {
 		});
 		expect(items[0].metadata).toBeUndefined();
 	});
+
+	it('uses explicit id from idByFilename instead of slugifying', () => {
+		const idByFilename = new Map([
+			['f_JP_06_anger_1_L.mp4', 's0001'],
+			['f_TW_01_fear_2_H.mp4', 's0002']
+		]);
+		const items = buildStimulusItems(
+			['f_JP_06_anger_1_L.mp4', 'f_TW_01_fear_2_H.mp4'],
+			{ idByFilename, existingFilenames: new Set(), existingIds: new Set() }
+		);
+		expect(items.map((i) => i.id)).toEqual(['s0001', 's0002']);
+	});
+
+	it('falls back to slugified filename when explicit id is missing or blank', () => {
+		const idByFilename = new Map([
+			['a.mp4', ''],          // blank → fallback
+			['b.mp4', '   '],        // whitespace-only → fallback
+			['c.mp4', 's0099']
+		]);
+		const items = buildStimulusItems(['a.mp4', 'b.mp4', 'c.mp4'], {
+			idByFilename,
+			existingFilenames: new Set(),
+			existingIds: new Set()
+		});
+		expect(items.map((i) => i.id)).toEqual(['a', 'b', 's0099']);
+	});
+
+	it('flags candidates missing from storage when storageFiles is provided', () => {
+		const items = buildStimulusItems(['a.mp4', 'b.mp4', 'c.mp4'], {
+			storageFiles: new Set(['a.mp4', 'c.mp4']),
+			existingFilenames: new Set(),
+			existingIds: new Set()
+		});
+		expect(items[0].missingInStorage).toBe(false);
+		expect(items[1].missingInStorage).toBe(true);
+		expect(items[2].missingInStorage).toBe(false);
+	});
+
+	it('omits missingInStorage entirely when storageFiles is not provided', () => {
+		const items = buildStimulusItems(['a.mp4'], {
+			existingFilenames: new Set(),
+			existingIds: new Set()
+		});
+		expect(items[0]).not.toHaveProperty('missingInStorage');
+	});
+
+	it('flags candidates as anchors when filename is in anchorFilenames set', () => {
+		const items = buildStimulusItems(['a.mp4', 'b.mp4', 'c.mp4'], {
+			anchorFilenames: new Set(['a.mp4', 'c.mp4']),
+			existingFilenames: new Set(),
+			existingIds: new Set()
+		});
+		expect(items[0].isAnchor).toBe(true);
+		expect(items[1].isAnchor).toBeUndefined();
+		expect(items[2].isAnchor).toBe(true);
+	});
+
+	it('still deduplicates against existingIds when explicit id collides', () => {
+		const idByFilename = new Map([['x.mp4', 's0001']]);
+		const items = buildStimulusItems(['x.mp4'], {
+			idByFilename,
+			existingFilenames: new Set(),
+			existingIds: new Set(['s0001'])
+		});
+		expect(items[0].id).toBe('s0001-2');
+	});
 });

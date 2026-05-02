@@ -60,6 +60,11 @@
 		storageCheck = { status: 'loading' };
 		try {
 			const res = await fetch(`/admin/experiments/${experimentId}/storage-check?path=${encodeURIComponent(config.stimuli.storagePath)}`);
+			if (!res.ok) {
+				const body = await res.json().catch(() => null);
+				storageCheck = { status: 'error', message: body?.message || `HTTP ${res.status}` };
+				return;
+			}
 			const body = await res.json();
 			if (body.error) {
 				storageCheck = { status: 'error', message: body.error };
@@ -285,10 +290,23 @@
 
 	{#each pagedIndices as i (config.stimuli.items[i]?.id ?? i)}
 		{@const item = config.stimuli.items[i]}
-		<div class="border border-gray-200 rounded p-3 space-y-2">
+		<div class="border {item.isAnchor ? 'border-amber-300 bg-amber-50/30' : 'border-gray-200'} rounded p-3 space-y-2">
 			<div class="flex items-center justify-between">
-				<span class="text-xs font-mono text-gray-400"><span class="text-gray-300">#{i + 1}</span> {item.id}</span>
 				<div class="flex items-center gap-2">
+					<span class="text-xs font-mono text-gray-400"><span class="text-gray-300">#{i + 1}</span> {item.id}</span>
+					{#if item.isAnchor}
+						<span class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 bg-amber-100 text-amber-800 rounded font-medium" title="Test-retest anchor: replicated into every chunk for this experiment">anchor</span>
+					{/if}
+				</div>
+				<div class="flex items-center gap-2">
+					<label class="flex items-center gap-1 text-xs text-gray-500 cursor-pointer" title="Mark as test-retest anchor — appears once per chunk for reliability checks">
+						<input
+							type="checkbox"
+							checked={item.isAnchor === true}
+							onchange={(e) => update(['stimuli', 'items', String(i), 'isAnchor'], e.currentTarget.checked || undefined)}
+						/>
+						<span>Anchor</span>
+					</label>
 					<button type="button" disabled={i === 0}
 						onclick={() => { [config.stimuli.items[i-1], config.stimuli.items[i]] = [config.stimuli.items[i], config.stimuli.items[i-1]]; }}
 						class="text-xs text-gray-400 hover:text-gray-600 cursor-pointer disabled:opacity-20 disabled:cursor-not-allowed">^</button>

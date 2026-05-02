@@ -1,0 +1,36 @@
+-- Drop two GIN indexes from the initial schema (001) that have zero
+-- steady-state JSONB-operator callers in app code.
+--
+-- idx_responses_data: never queried with GIN-eligible operators (@>, ?, ?&, ?|).
+-- App code reads response_data as a JS field; the response_flat view uses ->>
+-- (text extraction, not GIN-eligible).
+--
+-- idx_participants_registration: used only by the one-shot
+-- migrate_select_or_other_for_experiment RPC (`registration_data ? field_id`).
+-- That RPC runs O(experiments) times in a manual retrofit, never per request.
+-- Sequential scan there is acceptable; if a future migration needs the index,
+-- it can recreate it as part of its own migration file.
+--
+-- Both indexes cost write throughput on every insert/update to participants
+-- or responses (every write rebuilds the GIN tree). At current scale this is
+-- microseconds per write — but it's pure overhead.
+--
+-- Lock note: DROP INDEX takes ACCESS EXCLUSIVE on the table for the drop
+-- duration. For unused indexes this is microseconds. Apply during low-traffic
+-- hours. CONCURRENTLY is not used because Supabase wraps migrations in
+-- transactions, and CONCURRENTLY cannot run inside a transaction.
+--
+-- Pre-application checklist (REQUIRED before applying to prod):
+--   1. Confirm Supabase automated backups enabled + recent (<24h)
+--   2. Snapshot pg_stat_user_indexes for participants + responses; capture
+--      the idx_scan counts before and 7 days after this migration to verify
+--      no hidden caller surfaces a regression.
+--   3. Apply outside peak participant-flow hours.
+--
+-- Rollback: if a regression surfaces (unexpected slow query), recreate via
+--   psql $PROD_DB_URL -c "CREATE INDEX CONCURRENTLY idx_responses_data ON responses USING GIN(response_data);"
+--   psql $PROD_DB_URL -c "CREATE INDEX CONCURRENTLY idx_participants_registration ON participants USING GIN(registration_data);"
+-- then add a no-op migration 027 to track the manual recreation.
+
+DROP INDEX IF EXISTS idx_responses_data;
+DROP INDEX IF EXISTS idx_participants_registration;

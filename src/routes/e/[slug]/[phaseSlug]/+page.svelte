@@ -6,17 +6,29 @@
 	import { participantStore } from '$lib/stores/participant.svelte';
 	import { responseStore } from '$lib/stores/responses.svelte';
 	import { i18n } from '$lib/i18n/index.svelte';
-	import { seededShuffle } from '$lib/utils';
+	import { seededShuffle, formatDuration } from '$lib/utils';
+	import { formatTimestamp } from '$lib/utils/time-format';
+	import { widgetEntries, widgetKeys, isAllNullResponse, inScopeForChunk, isStimulusDoneInChunk } from '$lib/utils/response-data';
 	import { createReplayController } from '$lib/utils/replay';
 	import Header from '$lib/components/layout/Header.svelte';
-	import ProgressBar from '$lib/components/layout/ProgressBar.svelte';
-	import StimulusNav from '$lib/components/layout/StimulusNav.svelte';
 	import Modal from '$lib/components/layout/Modal.svelte';
 	import StimulusRenderer from '$lib/components/stimuli/StimulusRenderer.svelte';
 	import { getStimulusVideoUrl } from '$lib/components/stimuli/VideoPlayer.svelte';
 	import { PUBLIC_SUPABASE_URL } from '$env/static/public';
 	import WidgetRenderer from '$lib/components/widgets/WidgetRenderer.svelte';
 	import ReviewItemDisplay from '$lib/components/review/ReviewItemDisplay.svelte';
+	import GatekeeperPrompt from '$lib/components/participant/GatekeeperPrompt.svelte';
+	import BreakModal from '$lib/components/participant/BreakModal.svelte';
+	import BlockProgress from '$lib/components/participant/BlockProgress.svelte';
+	import CompletionModal, { type CompletionState } from '$lib/components/participant/CompletionModal.svelte';
+	import NavStrip from '$lib/components/participant/NavStrip.svelte';
+	import {
+		validateWidgets,
+		buildResponseData,
+		buildSkipResponseData,
+		uploadAudioBlobs,
+		persistResponse
+	} from '$lib/services/response-save';
 	import type { StimulusItemType, PhaseConfigType, ResponseWidgetType } from '$lib/config/schema';
 	import type { ResponseRecord } from '$lib/services/data';
 
@@ -25,6 +37,47 @@
 	let config = $derived(experiment.config);
 	let slug = $derived($page.params.slug);
 	let chunkSlug = $derived((data as Record<string, unknown>).chunkSlug as string | undefined);
+
+	// Mid-chunk re-entry: server returns resumeContext when 0 < completed < total.
+	// Show a one-time "Welcome back" screen on mount, dismissed for the rest of
+	// this page session.
+	let resumeContext = $derived(
+		(data as Record<string, unknown>).resumeContext as { completed: number; total: number } | null | undefined
+	);
+	let resumeDismissed = $state(false);
+	let showResume = $derived(!!resumeContext && !resumeDismissed);
+
+	// One-shot "Welcome back, {name}" toast set by the landing page on
+	// existing-account login. Auto-fades after 3 s; sessionStorage flag is
+	// cleared on read so subsequent navigations don't re-show it.
+	let welcomeToast = $state<string | null>(null);
+	$effect(() => {
+		if (typeof window === 'undefined') return;
+		try {
+			const name = sessionStorage.getItem('welcomeBackName');
+			if (name !== null) {
+				sessionStorage.removeItem('welcomeBackName');
+				welcomeToast = name
+					? i18n.platform('registration.welcome_back_named', { name })
+					: i18n.platform('registration.welcome_back');
+				setTimeout(() => { welcomeToast = null; }, 3000);
+			}
+		} catch { /* sessionStorage unavailable — silent no-op */ }
+	});
+
+	// Sticky error toast for save failures. The inline `message` state gets
+	// cleared at the start of every retry click, so a fast retry hides the
+	// "Failed to save" message before the participant can see it. This toast
+	// persists for 5 s independent of click state, so even rapid retry-flow
+	// failures stay visible. Click to dismiss.
+	let saveErrorToast = $state<string | null>(null);
+	let saveErrorTimeout: ReturnType<typeof setTimeout> | undefined;
+	function showSaveError() {
+		saveErrorToast = i18n.platform('survey.save_error');
+		if (saveErrorTimeout) clearTimeout(saveErrorTimeout);
+		saveErrorTimeout = setTimeout(() => { saveErrorToast = null; }, 5000);
+	}
+
 	let phase = $derived(data.phase as PhaseConfigType);
 	let isReviewPhase = $derived(phase?.type === 'review');
 	let phaseSlug = $derived(phase?.slug ?? '');
@@ -55,10 +108,7 @@
 		if (isReviewPhase && data.sourceResponses) {
 			let filtered = data.sourceResponses as ResponseRecord[];
 			if (phase?.reviewConfig?.filterEmpty) {
-				filtered = filtered.filter(r => {
-					const entries = Object.entries(r.response_data).filter(([k]) => k !== '_timestamp');
-					return entries.length > 0 && !entries.every(([, v]) => v === null || v === 'null');
-				});
+				filtered = filtered.filter((r) => !isAllNullResponse(r.response_data));
 			}
 			return filtered;
 		}
@@ -98,6 +148,49 @@
 		return currentItem as StimulusItemType | null;
 	});
 
+	// Per-participant chunk traversal order (chunked route only). Used by both
+	// `chunkCompletion` (anchor per-chunk fallback) and `nextChunkUrl` further
+	// down. Declared up here so chunkCompletion / gateMode can reference it.
+	let orderedChunkSlugs = $derived(
+		((data as Record<string, unknown>).orderedChunkSlugs as string[] | undefined) ?? null
+	);
+
+	/**
+	 * Canonical per-stimulus completion state from the perspective of THIS
+	 * chunk view. Single source of truth for the progress bar, StimulusNav
+	 * button colors, block-info count, gatekeeper-prior-response check, and
+	 * `checkCompletion` allDone test.
+	 *
+	 * - Regular stimuli: present if any prior response exists.
+	 * - Anchor stimuli on a chunked route: present only if a prior response
+	 *   has `_chunk === chunkSlug` (so anchors re-engage in each new chunk
+	 *   visit for test-retest reliability).
+	 * - Anchors with no `_chunk` field (legacy responses pre-F7): treated as
+	 *   if they belong to the participant's first chunk in their ordering.
+	 * - Value 'completed' vs 'skipped' depends on whether the in-scope
+	 *   responses have any non-null widget value.
+	 */
+	let chunkCompletion = $derived.by(() => {
+		const m = new Map<string, 'completed' | 'skipped'>();
+		if (isReviewPhase) {
+			// Review phases use response UUIDs as stimulus_id, no anchor concept.
+			const completed = responseStore.completedStimuli;
+			for (const item of items) {
+				const id = (item as ResponseRecord).id;
+				const state = completed.get(id);
+				if (state) m.set(id, state);
+			}
+			return m;
+		}
+		for (const item of items as StimulusItemType[]) {
+			const responses = responseStore.byStimulus.get(item.id) ?? [];
+			const inScope = inScopeForChunk(item, chunkSlug, responses);
+			if (inScope.length === 0) continue;
+			m.set(item.id, inScope.every((r) => isAllNullResponse(r.response_data)) ? 'skipped' : 'completed');
+		}
+		return m;
+	});
+
 	// Current item ID: for stimulus-response it's the stimulus id, for review it's the source response's UUID
 	let currentItemId = $derived.by(() => {
 		if (!currentItem) return '';
@@ -134,8 +227,11 @@
 		return signedUrls[nextStimulusItem.id] || getStimulusVideoUrl(nextStimulusItem, config.stimuli) || null;
 	});
 
+	// Chunk-aware: anchors in a fresh chunk visit start over at 'engage' even
+	// if rated in a prior chunk. Non-anchor stimuli behave as before (any prior
+	// response anywhere flips to 'continue').
 	let gateMode = $derived<'engage' | 'continue'>(
-		(responseStore.byStimulus.get(currentItemId)?.length ?? 0) > 0 ? 'continue' : 'engage'
+		chunkCompletion.has(currentItemId) ? 'continue' : 'engage'
 	);
 	// Pick the prompt to render. Falls back to `initial` when `subsequent` is
 	// omitted from the config — backwards compatible with single-prompt configs.
@@ -173,10 +269,14 @@
 		}
 	}
 
-	// Reset all state when phase changes (e.g. navigating from one phase to the next)
+	// Reset all state when phase OR chunk changes. Tracking `chunkSlug` matters
+	// because the SvelteKit route segment is identical between two chunks
+	// (`survey` → `survey`), so the component is reused — without this reset,
+	// `completionModalShown`, the previous chunk's currentIndex, and the
+	// just-completed banner all leak into the new chunk's first render.
 	$effect(() => {
-		// Access phaseSlug to track changes — this effect re-runs on every phase navigation
 		phaseSlug;
+		chunkSlug;
 		showCompletionModal = false;
 		completionModalShown = false;
 		responsesLoaded = false;
@@ -187,6 +287,39 @@
 		showGatekeeper = true;
 		showWidgets = false;
 		randomOrderSeed = crypto.randomUUID();
+		landedOnFirstIncomplete = false;
+	});
+
+	// Land on the first incomplete stimulus when the chunked phase loads
+	// (B3 fix). Without this, the participant would land on stimulus 1 even if
+	// they'd already finished 30/94 — and on a completed-stimulus landing with
+	// `allowMultipleResponses=false`, both gatekeeper and widgets are
+	// suppressed by design, so the page renders as a blank with just video +
+	// nav. Run once per phase mount, after both responses and the ordered list
+	// are loaded — then leave currentIndex alone so manual back-nav is honoured.
+	//
+	// Special case: when ALL stimuli are complete (firstIncomplete === -1),
+	// land on the LAST item so the block-info display reads "Block 3/3 — 31/31"
+	// instead of "Block 1/3 — 32/32" (which would be wrong since the user is
+	// done with all blocks).
+	let landedOnFirstIncomplete = $state(false);
+	$effect(() => {
+		if (landedOnFirstIncomplete) return;
+		if (!responsesLoaded) return;
+		// Chunked routes pass orderedStimulusIds explicitly; non-chunked routes
+		// fall back to the participant-ordered `items` list. Either way,
+		// `chunkCompletion` is the canonical "is this done in this view?"
+		// source.
+		const chunkedIds = (data as { orderedStimulusIds?: string[] }).orderedStimulusIds;
+		const orderedIds = chunkedIds ?? items.map((it) => isReviewPhase ? (it as ResponseRecord).id : (it as StimulusItemType).id);
+		if (orderedIds.length === 0) return;
+		const firstIncomplete = orderedIds.findIndex((id) => !chunkCompletion.has(id));
+		if (firstIncomplete > 0) {
+			responseStore.currentIndex = firstIncomplete;
+		} else if (firstIncomplete === -1) {
+			responseStore.currentIndex = orderedIds.length - 1;
+		}
+		landedOnFirstIncomplete = true;
 	});
 
 	// Always clear any running break timers when the component unmounts
@@ -245,8 +378,12 @@
 		audioBlobs = {};
 		message = null;
 
-		const existing = responseStore.byStimulus.get(currentItemId);
-		const hasExistingResponses = existing && existing.length > 0;
+		// Chunk-aware "has the participant already responded to THIS item in
+		// THIS chunk view?" check. For regular stimuli this is equivalent to
+		// "any prior response exists" (chunkCompletion mirrors that). For
+		// anchors on a chunked route, it's per-chunk so the gatekeeper engages
+		// fresh each chunk visit.
+		const hasExistingResponses = chunkCompletion.has(currentItemId);
 
 		if (isReviewPhase) {
 			// Review phase: no gatekeeper, show widgets directly unless already responded
@@ -310,29 +447,18 @@
 
 		saving = true;
 		try {
-			const responseData: Record<string, unknown> = {};
-			for (const w of activeWidgets) {
-				responseData[w.id] = null;
-			}
-
-			const res = await fetch(`/e/${slug}/${phaseSlug}/save`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					phaseId: phase.id,
-					stimulusId: currentItemId,
-					responseData,
-					responseIndex: getNextResponseIndex()
-				})
+			const responseData = buildSkipResponseData(activeWidgets, chunkSlug ?? null);
+			const saved = await persistResponse(slug!, phaseSlug, {
+				phaseId: phase.id,
+				stimulusId: currentItemId,
+				responseData,
+				responseIndex: getNextResponseIndex()
 			});
-
-			if (!res.ok) throw new Error('Failed to save');
-			const saved = await res.json();
 			responseStore.list = [...responseStore.list, saved];
-
 			advanceToNext();
 		} catch (err) {
 			message = { type: 'error', text: i18n.platform('survey.save_error') };
+			showSaveError();
 			console.error(err);
 		} finally {
 			saving = false;
@@ -342,83 +468,35 @@
 	async function handleSave() {
 		if (!phase || !currentItem) return;
 
-		// Validate required widgets (skip conditionally hidden ones)
-		for (const w of activeWidgets) {
-			if (!w.required) continue;
-			if (!isWidgetVisible(w)) continue;
-			if (w.type === 'timestamp-range') {
-				const [start, end] = (widgetValues[w.id] || '').split(',');
-				if (!start || !end) {
-					message = { type: 'error', text: i18n.platform('survey.fill_in_required', { field: i18n.localized(w.label, w.id) }) };
-					return;
-				}
-				if (parseFloat(start) >= parseFloat(end)) {
-					message = { type: 'error', text: i18n.platform('timestamps.order_error') };
-					return;
-				}
-			} else if (!String(widgetValues[w.id] ?? '').trim()) {
-				message = { type: 'error', text: i18n.platform('survey.fill_in_required', { field: i18n.localized(w.label, w.id) }) };
-				return;
-			}
+		const validation = validateWidgets(activeWidgets, widgetValues, isWidgetVisible);
+		if (validation) {
+			const w = validation.widget;
+			message =
+				validation.kind === 'timestamp_order'
+					? { type: 'error', text: i18n.platform('timestamps.order_error') }
+					: { type: 'error', text: i18n.platform('survey.fill_in_required', { field: i18n.localized(w.label, w.id) }) };
+			return;
 		}
 
 		saving = true;
 		message = null;
 
 		try {
-			const responseData: Record<string, unknown> = {};
-
-			// Upload any audio blobs first
+			// Upload audio first, then build the payload — failed audio uploads
+			// must not produce a half-saved response (transactional contract).
+			const audioToUpload: Record<string, Blob> = {};
 			for (const w of activeWidgets) {
-				if (w.type === 'audio-recording' && audioBlobs[w.id]) {
-					const blob = audioBlobs[w.id];
-					const formData = new FormData();
-					formData.append('file', blob);
-					formData.append('widgetId', w.id);
-					formData.append('stimulusId', currentItemId);
-
-					const uploadRes = await fetch(`/e/${slug}/${phaseSlug}/upload`, {
-						method: 'POST',
-						body: formData
-					});
-
-					if (!uploadRes.ok) throw new Error('Failed to upload audio');
-					const { path } = await uploadRes.json();
-					responseData[w.id] = path;
-				}
+				if (w.type === 'audio-recording' && audioBlobs[w.id]) audioToUpload[w.id] = audioBlobs[w.id];
 			}
+			const audioPaths = await uploadAudioBlobs(audioToUpload, slug!, phaseSlug, currentItemId);
 
-			for (const w of activeWidgets) {
-				// Hidden widgets get null
-				if (!isWidgetVisible(w)) {
-					responseData[w.id] = null;
-					continue;
-				}
-				if (w.type === 'audio-recording') {
-					if (!audioBlobs[w.id] && !(responseData[w.id])) {
-						responseData[w.id] = null;
-					}
-				} else if (w.type === 'timestamp-range') {
-					const [start, end] = (widgetValues[w.id] || '').split(',');
-					responseData[w.id] = (start && end) ? `${start}-${end}` : null;
-				} else {
-					const v = widgetValues[w.id];
-					responseData[w.id] = (v != null && v !== '') ? String(v) : null;
-				}
-			}
-			const res = await fetch(`/e/${slug}/${phaseSlug}/save`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					phaseId: phase.id,
-					stimulusId: currentItemId,
-					responseData,
-					responseIndex: getNextResponseIndex()
-				})
+			const responseData = buildResponseData(activeWidgets, widgetValues, audioPaths, isWidgetVisible, chunkSlug ?? null);
+			const saved = await persistResponse(slug!, phaseSlug, {
+				phaseId: phase.id,
+				stimulusId: currentItemId,
+				responseData,
+				responseIndex: getNextResponseIndex()
 			});
-
-			if (!res.ok) throw new Error('Failed to save');
-			const saved = await res.json();
 			responseStore.list = [...responseStore.list, saved];
 
 			message = { type: 'success', text: i18n.platform('survey.save_success') };
@@ -431,14 +509,15 @@
 			}
 		} catch (err) {
 			message = { type: 'error', text: i18n.platform('survey.save_error') };
+			showSaveError();
 			console.error(err);
 		} finally {
 			saving = false;
 		}
 	}
 
-	function getNextResponseIndex(): number {
-		const existing = responseStore.byStimulus.get(currentItemId);
+	function getNextResponseIndex(stimulusId: string = currentItemId): number {
+		const existing = responseStore.byStimulus.get(stimulusId);
 		return existing ? existing.length : 0;
 	}
 
@@ -465,12 +544,14 @@
 
 	async function autoSkipStimulus(item: unknown) {
 		const stimItem = item as StimulusItemType;
-		// Already has a response (from a previous skip or manual entry) — don't duplicate
-		if (responseStore.completedStimuli.has(stimItem.id)) return;
+		// Already has a response IN THIS CHUNK — don't duplicate. For anchors
+		// in a fresh chunk visit the rule fires again (different `_chunk` tag).
+		if (chunkCompletion.has(stimItem.id)) return;
 		const responseData: Record<string, unknown> = {};
 		for (const w of activeWidgets) {
 			responseData[w.id] = '_skipped_by_rule';
 		}
+		if (chunkSlug) responseData._chunk = chunkSlug;
 		try {
 			const res = await fetch(`/e/${slug}/${phaseSlug}/save`, {
 				method: 'POST',
@@ -479,7 +560,11 @@
 					phaseId: phase.id,
 					stimulusId: stimItem.id,
 					responseData,
-					responseIndex: 0
+					// For anchors that were auto-skipped in a prior chunk, the next
+					// auto-skip in this chunk needs a fresh response_index to avoid
+					// a unique-constraint collision on (participant, phase,
+					// stimulus, response_index).
+					responseIndex: getNextResponseIndex(stimItem.id)
 				})
 			});
 			if (res.ok) {
@@ -499,8 +584,13 @@
 			nextIndex++;
 		}
 		if (nextIndex < items.length) {
-			// Show break screen when crossing block boundaries
-			if (breakScreen && isBlockBoundary(responseStore.currentIndex, nextIndex)) {
+			// Show break screen when crossing block boundaries — even when the
+			// researcher didn't customise `breakScreen`, fall through to
+			// platform-default encouraging copy. Researchers can opt out by
+			// setting `chunking.breakScreen.disabled: true`.
+			const isBoundary = isBlockBoundary(responseStore.currentIndex, nextIndex);
+			const breakDisabled = breakScreen?.disabled === true;
+			if (isBoundary && !breakDisabled) {
 				startBreakScreen(nextIndex);
 			} else {
 				responseStore.currentIndex = nextIndex;
@@ -511,7 +601,10 @@
 	}
 
 	function handleItemSelect(item: StimulusItemType) {
-		// Block navigation to completed items when allowRevisit is false
+		// Block navigation to completed items when allowRevisit is false.
+		// (Uses the global completedStimuli — for non-anchor stimuli that's
+		// the right semantic. allowRevisit=false + anchors is an unsupported
+		// combination since anchors require re-engaging.)
 		if (!isReviewPhase && !phase?.allowRevisit && responseStore.completedStimuli.has(item.id)) {
 			return;
 		}
@@ -520,28 +613,63 @@
 			if (isReviewPhase) return (s as ResponseRecord).id === item.id;
 			return (s as StimulusItemType).id === item.id;
 		});
-		if (idx >= 0) responseStore.currentIndex = idx;
+		if (idx >= 0) navigateToIndex(idx);
+	}
+
+	/**
+	 * Boundary-aware navigation for any "jump to a specific stimulus" path
+	 * (Prev/Next buttons, Jump-to nav, StimulusNav clicks). Forward navigation
+	 * across a block boundary triggers the break-screen modal so the
+	 * participant can't bypass the forced pause. Backward navigation
+	 * (returning to an earlier item) skips the break — they've already passed
+	 * it once.
+	 */
+	function navigateToIndex(targetIdx: number) {
+		if (targetIdx < 0 || targetIdx >= items.length) return;
+		const isBoundary = isBlockBoundary(responseStore.currentIndex, targetIdx);
+		const goingForward = targetIdx > responseStore.currentIndex;
+		const breakDisabled = breakScreen?.disabled === true;
+		if (goingForward && isBoundary && !breakDisabled) {
+			startBreakScreen(targetIdx);
+		} else {
+			responseStore.currentIndex = targetIdx;
+		}
 	}
 
 	function checkCompletion() {
 		if (completionModalShown) return;
-		const navItems = getNavItems();
-		const allDone = navItems.every(s => responseStore.completedStimuli.has(s.id));
-		if (allDone && navItems.length > 0) {
+		// Completion fires on the full phase (whole chunk in chunked context),
+		// NOT just the visible block — `items` is the right source here. Uses
+		// chunkCompletion so anchors are required to be rated IN THIS CHUNK
+		// (a chunk-1 anchor rating doesn't satisfy chunk-3's completion).
+		const allItems = items as Array<{ id: string }>;
+		const allDone = allItems.every((s) => chunkCompletion.has(s.id));
+		if (allDone && allItems.length > 0) {
 			showCompletionModal = true;
 			completionModalShown = true;
-			// Start break countdown for next chunk if this is the last phase of the chunk
+			// Start break countdown for next chunk if this is the last phase of
+			// the chunk. Anchor to the actual last-response timestamp so a page
+			// reload (HMR, browser refresh, server restart) doesn't snap the
+			// countdown back to MAX — server-side `resolveParticipantNextChunk` already
+			// enforces the wall-clock break, and the client just mirrors it.
 			if (nextChunkUrl && !resolveNextPhase()) {
 				const minBreakMinutes = config?.stimuli?.chunking?.minBreakMinutes;
 				if (minBreakMinutes && minBreakMinutes > 0) {
-					nextChunkCountdownSecs = minBreakMinutes * 60;
-					nextChunkTimerInterval = setInterval(() => {
-						nextChunkCountdownSecs--;
-						if (nextChunkCountdownSecs <= 0) {
-							clearInterval(nextChunkTimerInterval);
-							nextChunkTimerInterval = undefined;
-						}
-					}, 1000);
+					const timestamps = responseStore.list
+						.map((r) => new Date(r.created_at).getTime())
+						.filter((t) => Number.isFinite(t));
+					const lastResponseAt = timestamps.length > 0 ? Math.max(...timestamps) : Date.now();
+					const cooldownEndsAt = lastResponseAt + minBreakMinutes * 60 * 1000;
+					nextChunkCountdownSecs = Math.max(0, Math.ceil((cooldownEndsAt - Date.now()) / 1000));
+					if (nextChunkCountdownSecs > 0) {
+						nextChunkTimerInterval = setInterval(() => {
+							nextChunkCountdownSecs--;
+							if (nextChunkCountdownSecs <= 0) {
+								clearInterval(nextChunkTimerInterval);
+								nextChunkTimerInterval = undefined;
+							}
+						}, 1000);
+					}
 				}
 			}
 		}
@@ -558,7 +686,17 @@
 		goto(`/e/${slug}`);
 	}
 
-	// Build nav items for StimulusNav (needs id + label shape)
+	// Build nav items for StimulusNav (needs id + label shape).
+	//
+	// For stimulus-response phases we render the participant-ordered `items`,
+	// not the raw `config.stimuli.items` (which is alphabetical by import order).
+	// When the chunked route returns blockBoundaries, we slice to JUST the
+	// current block so a 600-stimulus chunk doesn't print all 600 buttons.
+	//
+	// Labels: prefer `item.label` if set; otherwise use a block-relative
+	// numeric label "1..N". This avoids dumping noisy auto-generated ids like
+	// `s0467-2` onto the page while preserving meaningful labels for
+	// experiments that set them.
 	function getNavItems(): { id: string; label?: Record<string, string> }[] {
 		if (isReviewPhase) {
 			return (items as ResponseRecord[]).map((r, i) => ({
@@ -566,7 +704,17 @@
 				label: { en: `${i + 1}`, ja: `${i + 1}` }
 			}));
 		}
-		return config?.stimuli?.items ?? [];
+		const ordered = items as StimulusItemType[];
+		const idx = responseStore.currentIndex;
+		const block = blockBoundaries?.find((b) => idx >= b.startIndex && idx <= b.endIndex);
+		const slice = block ? ordered.slice(block.startIndex, block.endIndex + 1) : ordered;
+		return slice.map((s, i) => {
+			if (s.label && Object.values(s.label).some((v) => v && v.length > 0)) {
+				return { id: s.id, label: s.label };
+			}
+			const numeric = String(i + 1);
+			return { id: s.id, label: { en: numeric, ja: numeric } };
+		});
 	}
 
 	function evaluateBranchCondition(condition: { widgetId: string; stimulusId?: string; operator: 'equals' | 'not_equals'; value: string }): boolean {
@@ -603,7 +751,7 @@
 
 	// Block boundaries and break screen (chunked route only)
 	let blockBoundaries = $derived((data as Record<string, unknown>).blockBoundaries as { blockId: string; startIndex: number; endIndex: number; label?: Record<string, string> }[] | undefined);
-	let breakScreen = $derived((data as Record<string, unknown>).breakScreen as { title: Record<string, string>; body: Record<string, string>; duration?: number } | null | undefined);
+	let breakScreen = $derived((data as Record<string, unknown>).breakScreen as { title?: Record<string, string>; body?: Record<string, string>; duration?: number; disabled?: boolean } | null | undefined);
 
 	let currentBlockInfo = $derived.by(() => {
 		if (!blockBoundaries) return null;
@@ -611,7 +759,10 @@
 		const block = blockBoundaries.find(b => idx >= b.startIndex && idx <= b.endIndex);
 		if (!block) return null;
 		const blockStimIds = items.slice(block.startIndex, block.endIndex + 1).map(s => (s as StimulusItemType).id);
-		const completed = blockStimIds.filter(id => responseStore.completedStimuli.has(id)).length;
+		// Chunk-aware count so anchors don't inflate the block-info counter on
+		// chunk entry (a 0/32 block doesn't read 5/32 just because the 5
+		// anchors happened to be rated in a previous chunk).
+		const completed = blockStimIds.filter(id => chunkCompletion.has(id)).length;
 		return {
 			blockIndex: blockBoundaries.indexOf(block) + 1,
 			totalBlocks: blockBoundaries.length,
@@ -623,18 +774,116 @@
 	/** Pending index to navigate to after break screen is dismissed */
 	let pendingBreakIndex = $state(-1);
 
-	// Next-chunk navigation (chunked route, last phase of chunk)
+	// Next-chunk navigation (chunked route, last phase of chunk).
+	// Uses the participant's resolved chunk traversal order from server data
+	// (`orderedChunkSlugs`, declared earlier near `chunkCompletion`) — NOT the
+	// raw `chunks[idx + 1]` order, so latin-square / random-per-participant
+	// counterbalancing actually takes effect at chunk boundaries.
 	let nextChunkUrl = $derived.by(() => {
 		if (!chunkSlug || !config) return null;
+		const ordering = orderedChunkSlugs ?? config.stimuli?.chunking?.chunks?.map((c: { slug: string }) => c.slug) ?? [];
 		const chunks = config.stimuli?.chunking?.chunks ?? [];
-		const idx = chunks.findIndex((c: { slug: string }) => c.slug === chunkSlug);
-		if (idx < 0 || idx >= chunks.length - 1) return null;
-		const nextChunk = chunks[idx + 1];
-		return `/e/${slug}/c/${nextChunk.slug}/${config.phases[0]?.slug ?? 'survey'}`;
+		// "is this OTHER chunk fully complete?" — anchor-aware via the shared
+		// `isStimulusDoneInChunk` helper, so anchors require a `_chunk`-tagged
+		// response specific to each chunk.
+		const itemMap = new Map(config.stimuli?.items?.map((it: { id: string; isAnchor?: boolean }) => [it.id, it]) ?? []);
+		const isChunkDone = (chunkSlugLocal: string): boolean => {
+			const c = chunks.find((x: { slug: string }) => x.slug === chunkSlugLocal);
+			if (!c) return true;
+			const allIds = c.blocks.flatMap((b: { stimulusIds?: string[] }) => b.stimulusIds ?? []);
+			if (allIds.length === 0) return true;
+			return allIds.every((id: string) => {
+				const stim = itemMap.get(id) ?? { isAnchor: false };
+				const responses = responseStore.byStimulus.get(id) ?? [];
+				return isStimulusDoneInChunk(stim, chunkSlugLocal, responses);
+			});
+		};
+		// Bail out unless the CURRENT chunk is done. The "Start next session"
+		// banner / completion modal is meaningless mid-chunk, and resolving
+		// `nextChunkUrl` while the current chunk is still incomplete causes a
+		// chunk-flip loop: the destination chunk's derivation would skip itself
+		// and point back at the previous chunk (which is also incomplete), and
+		// vice versa, so a still-mounted banner can ping-pong the participant.
+		if (!isChunkDone(chunkSlug)) return null;
+		// Find the first INCOMPLETE chunk in this participant's ordering, other
+		// than the current one. Defends against the participant ending up out
+		// of order (e.g. misdirected to a later chunk first).
+		for (const slugInOrder of ordering) {
+			if (slugInOrder === chunkSlug) continue;
+			if (!isChunkDone(slugInOrder)) {
+				return `/e/${slug}/c/${slugInOrder}/${config.phases[0]?.slug ?? 'survey'}`;
+			}
+		}
+		return null; // every other chunk is also complete → end of experiment
 	});
 
 	let nextChunkCountdownSecs = $state(0);
 	let nextChunkTimerInterval: ReturnType<typeof setInterval> | undefined;
+
+	// `CompletionState` lives in CompletionModal.svelte (it's the component's
+	// public contract). The phase page imports the type and produces values
+	// of it via the derivation below; the modal pattern-matches on `state.kind`.
+	let completionState: CompletionState = $derived.by(() => {
+		const np = resolveNextPhase();
+		if (np) {
+			return {
+				kind: 'next-phase',
+				phase: np,
+				customLabel: phase?.completion?.nextPhaseButton ?? null
+			};
+		}
+		if (nextChunkUrl) {
+			return nextChunkCountdownSecs > 0
+				? { kind: 'next-chunk-cooldown', remainingSecs: nextChunkCountdownSecs }
+				: { kind: 'next-chunk-ready', url: nextChunkUrl };
+		}
+		return { kind: 'finish', customLabel: phase?.completion?.nextPhaseButton ?? null };
+	});
+
+	// Title + body resolved as a single derived. `next-phase` uses the
+	// per-phase customizable copy; everything chunk-end uses the platform's
+	// session-complete strings (with three sub-bodies depending on cooldown
+	// state, computed against REMAINING time so a reload mid-cooldown shows
+	// the right number).
+	let completionCopy = $derived.by(() => {
+		// `finish` is the last-chunk / non-chunked end-of-experiment state. Copy
+		// must NOT promise a "next session" (the participant is done) — they
+		// just need to click Finish to submit. Distinct title + body keys.
+		if (completionState.kind === 'finish') {
+			return {
+				title: i18n.platform('survey.last_chunk_complete_title'),
+				body: i18n.platform('survey.last_chunk_complete_body')
+			};
+		}
+		const isAtChunkBoundary =
+			completionState.kind === 'next-chunk-cooldown' ||
+			completionState.kind === 'next-chunk-ready';
+		const title = isAtChunkBoundary
+			? i18n.platform('survey.session_complete_title')
+			: phase?.completion
+				? i18n.localized(phase.completion.title)
+				: i18n.platform('survey.completion_title');
+
+		const minBreakMinutes = config?.stimuli?.chunking?.minBreakMinutes ?? 0;
+		const remainingMinutes = Math.max(1, Math.ceil(nextChunkCountdownSecs / 60));
+		let body: string;
+		if (isAtChunkBoundary) {
+			if (minBreakMinutes > 0 && nextChunkCountdownSecs > 0) {
+				body = i18n.platform('survey.session_complete_body_with_break', {
+					duration: formatDuration(remainingMinutes)
+				});
+			} else if (minBreakMinutes > 0 && nextChunkCountdownSecs === 0) {
+				body = i18n.platform('survey.session_complete_body_ready');
+			} else {
+				body = i18n.platform('survey.session_complete_body');
+			}
+		} else {
+			body = phase?.completion
+				? i18n.localized(phase.completion.body)
+				: i18n.platform('survey.completion_body');
+		}
+		return { title, body };
+	});
 
 	function isBlockBoundary(fromIndex: number, toIndex: number): boolean {
 		if (!blockBoundaries) return false;
@@ -669,10 +918,94 @@
 	}
 
 	let navItems = $derived(getNavItems());
-	let currentResponses = $derived(responseStore.byStimulus.get(currentItemId) ?? []);
-	let completedCount = $derived(responseStore.completedStimuli.size);
-	// Map from widget id → widget type for use in the saved-responses display.
+	let currentResponses = $derived.by(() => {
+		const all = responseStore.byStimulus.get(currentItemId) ?? [];
+		if (isReviewPhase) return all;
+		// Anchor blinding: hide prior-chunk ratings so the rater gives a
+		// fresh judgment — same `inScopeForChunk` semantic the completion
+		// check uses.
+		return inScopeForChunk(currentStimulusItem ?? { isAnchor: false }, chunkSlug, all);
+	});
+
+	// `chunkCompletion` is already filtered to `items`, so its size is the
+	// progress count for the current chunk view (F0 fix: was previously
+	// `completedStimuli.size`, which is global-across-chunks → 198% bug).
+	let completedCount = $derived(chunkCompletion.size);
+	// Map from widget id → widget type / localized label, for use in the
+	// saved-responses display. Falls back to the raw id when no label is set.
 	let widgetTypeMap = $derived(new Map(activeWidgets.map(w => [w.id, w.type])));
+
+	// Compact nav controls (Tier 2.13). The full StimulusNav is collapsed by
+	// default; a participant who needs to back-jump expands it via this toggle.
+	let navExpanded = $state(false);
+	let navAllowed = $derived(
+		isReviewPhase ? phase?.reviewConfig?.allowNavigation === true : phase?.allowRevisit !== false
+	);
+	let currentBlockSlice = $derived.by(() => {
+		const idx = responseStore.currentIndex;
+		const block = blockBoundaries?.find((b) => idx >= b.startIndex && idx <= b.endIndex);
+		if (!block) return { positionInBlock: idx + 1, blockTotal: items.length };
+		return {
+			positionInBlock: idx - block.startIndex + 1,
+			blockTotal: block.endIndex - block.startIndex + 1
+		};
+	});
+	function gotoPrev() {
+		navigateToIndex(responseStore.currentIndex - 1);
+	}
+	function gotoNext() {
+		navigateToIndex(responseStore.currentIndex + 1);
+	}
+	let widgetLabelMap = $derived(
+		new Map(activeWidgets.map((w) => [w.id, w.label ? i18n.localized(w.label, w.id) : w.id]))
+	);
+
+	type SavedEntry =
+		| { kind: 'pair'; widgetId: string; label: string; start: string; end: string }
+		| { kind: 'audio'; widgetId: string; label: string; path: string }
+		| { kind: 'single'; widgetId: string; label: string; value: string };
+
+	/** Coalesce response_data keys into display entries: timestamp pairs collapse,
+	 * audio paths get their own kind, plain text/number values stay as-is. */
+	function buildSavedEntries(responseData: Record<string, unknown>): SavedEntry[] {
+		const entries: SavedEntry[] = [];
+		const consumed = new Set<string>();
+		const keys = widgetKeys(responseData);
+		for (const key of keys) {
+			if (consumed.has(key)) continue;
+			const val = responseData[key];
+			if (val === null || val === 'null' || val === undefined) continue;
+			// Pair detection: a key ending in _start whose sibling _end also exists.
+			if (key.endsWith('_start')) {
+				const prefix = key.slice(0, -'_start'.length);
+				const endKey = `${prefix}_end`;
+				const endVal = responseData[endKey];
+				if (endVal !== undefined && endVal !== null && endVal !== 'null') {
+					const startNum = parseFloat(String(val));
+					const endNum = parseFloat(String(endVal));
+					entries.push({
+						kind: 'pair',
+						widgetId: prefix,
+						label: widgetLabelMap.get(prefix) ?? prefix,
+						start: Number.isFinite(startNum) && startNum >= 0 ? formatTimestamp(startNum) : String(val),
+						end: Number.isFinite(endNum) && endNum >= 0 ? formatTimestamp(endNum) : String(endVal)
+					});
+					consumed.add(key);
+					consumed.add(endKey);
+					continue;
+				}
+			}
+			if (key.endsWith('_end')) continue; // unmatched _end — skip; will fall through if no pair
+			const label = widgetLabelMap.get(key) ?? key;
+			if (widgetTypeMap.get(key) === 'audio-recording' && typeof val === 'string') {
+				entries.push({ kind: 'audio', widgetId: key, label, path: val });
+			} else {
+				entries.push({ kind: 'single', widgetId: key, label, value: String(val) });
+			}
+			consumed.add(key);
+		}
+		return entries;
+	}
 </script>
 
 <svelte:head>
@@ -682,41 +1015,112 @@
 
 <Header onLogout={handleLogout} />
 
-<main class="container">
-	{#if config && phase && currentItem}
-		<!-- Participant name -->
-		<p class="text-sm text-gray-500 mb-3">
-			{participantStore.current?.registrationData?.name as string ?? participantStore.current?.email ?? ''}
-		</p>
+{#if welcomeToast}
+	<!-- One-shot welcome-back toast (auto-fades after 3 s). Fixed-position so
+	     it doesn't shift the page layout. -->
+	<div class="fixed top-4 right-4 z-50 bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-2 rounded shadow text-sm">
+		{welcomeToast}
+	</div>
+{/if}
 
+{#if saveErrorToast}
+	<!-- Sticky save-error toast (auto-fades after 5 s, click to dismiss). The
+	     inline `message` indicator is cleared on the next retry click, so
+	     fast retry-flow failures need a separate toast to stay visible. -->
+	<button
+		type="button"
+		onclick={() => { saveErrorToast = null; }}
+		class="fixed top-4 right-4 z-50 bg-red-50 border border-red-300 text-red-800 px-4 py-2 rounded shadow text-sm cursor-pointer hover:bg-red-100"
+	>
+		{saveErrorToast}
+	</button>
+{/if}
+
+<!-- Mid-chunk re-entry welcome-back screen. Renders once on mount when the
+     server's resumeContext indicates this participant left this chunk
+     unfinished. Dismissed for the rest of the page session. -->
+{#if showResume && resumeContext}
+	{@const pct = Math.round((resumeContext.completed / resumeContext.total) * 100)}
+	<Modal
+		show={showResume}
+		title={i18n.platform('survey.welcome_back_title')}
+		onclose={() => { resumeDismissed = true; }}
+	>
+		<p class="text-gray-600 mb-4">
+			{i18n.platform('survey.welcome_back_body', {
+				pct: String(pct),
+				completed: String(resumeContext.completed),
+				total: String(resumeContext.total)
+			})}
+		</p>
+		<div class="flex justify-end">
+			<button
+				type="button"
+				class="bg-indigo-600 text-white py-2 px-4 rounded hover:bg-indigo-700 cursor-pointer"
+				onclick={() => { resumeDismissed = true; }}
+			>
+				{i18n.platform('survey.resume_button')}
+			</button>
+		</div>
+	</Modal>
+{/if}
+
+<main class="participant-container">
+	{#if config && phase && currentItem}
 		<!-- Phase title (for review phases) -->
 		{#if isReviewPhase && phase.title}
 			<h2 class="text-lg font-semibold mb-2">{i18n.localized(phase.title)}</h2>
 		{/if}
 
-		<!-- Phase-complete banner (shown after modal is dismissed via "stay on page") -->
+		<!-- Phase-complete banner (shown after modal is dismissed via "stay on page").
+		     During cooldown: a non-clickable live countdown — clicking does nothing
+		     (avoids B1's modal-oscillation loop). When cooldown is 0: a clickable
+		     button that navigates directly to nextChunkUrl, skipping the modal. -->
 		{#if completionModalShown && !showCompletionModal}
-			<button
-				type="button"
-				onclick={() => { showCompletionModal = true; }}
-				class="w-full mb-3 flex items-center justify-between bg-indigo-50 border border-indigo-200 rounded px-3 py-2 text-sm cursor-pointer hover:bg-indigo-100"
-			>
-				<span class="text-indigo-700 font-medium">{i18n.platform('survey.completion_title')}</span>
-				<span class="text-indigo-600">{i18n.platform('survey.next_phase')} →</span>
-			</button>
+			{#if nextChunkUrl && nextChunkCountdownSecs > 0}
+				{@const m = Math.floor(nextChunkCountdownSecs / 60)}
+				{@const s = nextChunkCountdownSecs % 60}
+				<div
+					class="w-full mb-3 flex items-center justify-between bg-amber-50 border border-amber-200 rounded px-3 py-2 text-sm"
+				>
+					<span class="text-amber-800 font-medium">{i18n.platform('survey.completion_title')}</span>
+					<span class="text-amber-700 font-mono">
+						{i18n.platform('survey.session_complete_resume_in', { time: m > 0 ? `${m}m ${s}s` : `${s}s` })}
+					</span>
+				</div>
+			{:else if nextChunkUrl}
+				<button
+					type="button"
+					onclick={() => { goto(nextChunkUrl!); }}
+					class="w-full mb-3 flex items-center justify-between bg-emerald-50 border border-emerald-300 rounded px-3 py-2 text-sm cursor-pointer hover:bg-emerald-100"
+				>
+					<span class="text-emerald-800 font-medium">{i18n.platform('survey.completion_title')}</span>
+					<span class="text-emerald-700">{i18n.platform('survey.start_next_chunk')} →</span>
+				</button>
+			{:else}
+				<!-- No next chunk — just a tiny "complete" indicator that re-opens
+				     the modal (the original "stay on page" stayed-state). -->
+				<button
+					type="button"
+					onclick={() => { showCompletionModal = true; }}
+					class="w-full mb-3 flex items-center justify-between bg-indigo-50 border border-indigo-200 rounded px-3 py-2 text-sm cursor-pointer hover:bg-indigo-100"
+				>
+					<span class="text-indigo-700 font-medium">{i18n.platform('survey.completion_title')}</span>
+					<span class="text-indigo-600">{i18n.platform('survey.finish_experiment')} →</span>
+				</button>
+			{/if}
 		{/if}
 
-		<!-- Progress -->
-		<ProgressBar current={completedCount} total={items.length} />
-
-		{#if currentBlockInfo}
-			<p class="text-xs text-gray-500 mt-1">
-				Block {currentBlockInfo.blockIndex}/{currentBlockInfo.totalBlocks} — {currentBlockInfo.completed}/{currentBlockInfo.total} completed
-			</p>
-		{/if}
+		<!-- Progress + block info on a single line -->
+		<BlockProgress
+			completedCount={completedCount}
+			totalItems={items.length}
+			{blockBoundaries}
+			{currentBlockInfo}
+		/>
 
 		<!-- Stimulus / Review item display -->
-		<div class="mt-4 mb-4">
+		<div class="my-3">
 			{#if isReviewPhase}
 				<ReviewItemDisplay
 					sourceResponse={currentItem as ResponseRecord}
@@ -728,7 +1132,7 @@
 					bind:mediaElement
 				/>
 			{:else}
-				<div class="rounded-lg transition-all duration-200" class:ring-4={highlightActive} class:ring-indigo-500={highlightActive}>
+				<div class="rounded-lg" class:stimulus-highlight={highlightActive}>
 					<StimulusRenderer
 						item={currentItem as StimulusItemType}
 						config={config.stimuli}
@@ -739,33 +1143,30 @@
 			{/if}
 		</div>
 
-		<!-- Item navigation (hidden when revisiting is disabled) -->
-		{#if isReviewPhase ? (phase.reviewConfig?.allowNavigation === true) : (phase.allowRevisit !== false)}
-			<StimulusNav
-				items={navItems as StimulusItemType[]}
-				activeId={currentItemId}
-				completionMap={responseStore.completedStimuli}
-				onselect={handleItemSelect}
-			/>
-		{/if}
+		<!-- StimulusNav was moved to BELOW the response widgets (Tier 2.13) so
+		     the participant's eye stays on Video → Widgets without 32 buttons
+		     of "noise" in between. The full nav is now collapsed-by-default. -->
 
-		<!-- Existing responses for this item -->
+		<!-- Existing responses for this item — friendlier rendering: widget
+		     labels, timestamp pairs collapsed as "label: 0:01.05 → 0:03.50",
+		     audio playback inline. -->
 		{#if currentResponses.length > 0 && !isReviewPhase}
 			<div class="mt-3 p-3 bg-gray-50 rounded border text-sm">
 				<p class="font-medium text-gray-700 mb-2">{i18n.platform('common.saved_responses')}</p>
 				{#each currentResponses as resp}
+					{@const entries = buildSavedEntries(resp.response_data)}
 					<div class="mb-1 text-gray-600">
-						{#each Object.entries(resp.response_data) as [key, val]}
-							{#if key !== '_timestamp' && val !== 'null' && val !== null}
-								<span class="mr-3">
-									<strong>{key}:</strong>
-									{#if widgetTypeMap.get(key) === 'audio-recording' && typeof val === 'string'}
-										<audio src={signedUrls[val] ?? `${PUBLIC_SUPABASE_URL}/storage/v1/object/public/experiments/${val}`} controls class="inline h-8 w-48 align-middle ml-1"></audio>
-									{:else}
-										{val}
-									{/if}
-								</span>
-							{/if}
+						{#each entries as entry (entry.widgetId)}
+							<span class="mr-3">
+								<strong>{entry.label}:</strong>
+								{#if entry.kind === 'pair'}
+									<span class="font-mono">{entry.start} → {entry.end}</span>
+								{:else if entry.kind === 'audio'}
+									<audio src={signedUrls[entry.path] ?? `${PUBLIC_SUPABASE_URL}/storage/v1/object/public/experiments/${entry.path}`} controls class="inline h-8 w-48 align-middle ml-1"></audio>
+								{:else}
+									{entry.value}
+								{/if}
+							</span>
 						{/each}
 					</div>
 				{/each}
@@ -778,31 +1179,26 @@
 
 		<!-- Gatekeeper + Response widgets: keyed by phase+index to force remount on every stimulus change -->
 		{#key `${phase.id}-${responseStore.currentIndex}`}
+			<!-- Defensive UI for the "already answered" state (B3 fix). When a
+			     participant manually backs to a stimulus they already responded to
+			     with `allowMultipleResponses=false`, both gatekeeper and widgets
+			     are intentionally hidden — without this note, the page is silently
+			     blank below the video. -->
+			{#if !isReviewPhase && !showGatekeeper && !showWidgets && currentResponses.length > 0}
+				<div class="mt-6 p-4 bg-blue-50 border border-blue-200 rounded text-sm text-blue-800 text-center">
+					{i18n.platform('survey.already_answered')}
+				</div>
+			{/if}
+
 			<!-- Gatekeeper question (stimulus-response only) -->
 			{#if showGatekeeper && gatePrompt && !isReviewPhase}
-				<div class="mt-6 text-center">
-					<p class="text-sm font-medium mb-4">
-						{i18n.localized(gatePrompt.text)}
-					</p>
-					<div class="flex gap-4 justify-center">
-						<button
-							id="gatekeeper-yes"
-							class="px-6 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors cursor-pointer disabled:opacity-60"
-							onclick={handleYes}
-							disabled={saving || gatekeeperClicked !== null}
-						>
-							{gatekeeperClicked === 'yes' ? '…' : i18n.localized(gatePrompt.yesLabel, i18n.platform('common.yes'))}
-						</button>
-						<button
-							id="gatekeeper-no"
-							class="px-6 py-2 bg-gray-400 text-white rounded hover:bg-gray-500 transition-colors cursor-pointer disabled:opacity-60"
-							onclick={handleNo}
-							disabled={saving || gatekeeperClicked !== null}
-						>
-							{gatekeeperClicked === 'no' ? '…' : i18n.localized(gatePrompt.noLabel, i18n.platform('common.no'))}
-						</button>
-					</div>
-				</div>
+				<GatekeeperPrompt
+					prompt={gatePrompt}
+					clicked={gatekeeperClicked}
+					{saving}
+					onYes={handleYes}
+					onNo={handleNo}
+				/>
 			{/if}
 
 			<!-- Response widgets -->
@@ -831,14 +1227,40 @@
 			{/if}
 		{/key}
 
+		<!-- Compact navigation strip (Tier 2.13). Sits BELOW the widgets so the
+		     video → answer reading flow isn't broken by 32 buttons in between.
+		     The two phase-type variants share button/strip structure; the only
+		     real divergence is the middle counter label, so the caller resolves
+		     it once and the component stays free of `{#if isReviewPhase}`. -->
+		{#if navAllowed}
+			<NavStrip
+				label={isReviewPhase
+					? `${responseStore.currentIndex + 1} / ${items.length}`
+					: i18n.platform('survey.item_position', {
+							current: String(currentBlockSlice.positionInBlock),
+							total: String(currentBlockSlice.blockTotal)
+						})}
+				canPrev={responseStore.currentIndex > 0}
+				canNext={responseStore.currentIndex < items.length - 1}
+				onPrev={gotoPrev}
+				onNext={gotoNext}
+				expanded={navExpanded}
+				onToggle={() => (navExpanded = !navExpanded)}
+				items={navItems as StimulusItemType[]}
+				activeId={currentItemId}
+				completionMap={chunkCompletion}
+				onSelectItem={(item) => { handleItemSelect(item); navExpanded = false; }}
+			/>
+		{/if}
+
 		<!-- For review: show saved reasoning if already completed -->
 		{#if isReviewPhase && currentResponses.length > 0}
 			<div class="mt-3 p-3 bg-green-50 rounded border border-green-200 text-sm">
 				<p class="font-medium text-green-800 mb-2">{i18n.platform('common.saved_responses')}</p>
 				{#each currentResponses as resp}
 					<div class="mb-1 text-green-700">
-						{#each Object.entries(resp.response_data) as [key, val]}
-							{#if key !== '_timestamp' && val !== 'null' && val !== null}
+						{#each widgetEntries(resp.response_data) as [key, val]}
+							{#if val !== 'null' && val !== null}
 								<span class="mr-3">
 									<strong>{key}:</strong>
 									{#if widgetTypeMap.get(key) === 'audio-recording' && typeof val === 'string'}
@@ -854,70 +1276,40 @@
 			</div>
 		{/if}
 
-		<!-- Break screen modal (between blocks in chunked experiments) -->
-		{#if breakScreen}
-			<Modal show={showBreakScreen} title={i18n.localized(breakScreen.title)} onclose={dismissBreakScreen}>
-				<p class="text-gray-600 mb-4">{i18n.localized(breakScreen.body)}</p>
-				<button
-					class="w-full bg-indigo-600 text-white py-2 px-4 rounded hover:bg-indigo-700 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-					onclick={dismissBreakScreen}
-					disabled={breakCountdown > 0}
-				>
-					{breakCountdown > 0 ? `${i18n.platform('common.continue')} (${breakCountdown}s)` : i18n.platform('common.continue')}
-				</button>
-			</Modal>
+		<!-- Break screen modal (between blocks in chunked experiments). When the
+		     researcher hasn't customised title/body, the BreakModal falls through
+		     to encouraging platform defaults. `breakScreen.disabled: true` opts
+		     out entirely. -->
+		{#if !breakScreen?.disabled}
+			<BreakModal
+				show={showBreakScreen}
+				{breakScreen}
+				countdown={breakCountdown}
+				ondismiss={dismissBreakScreen}
+			/>
 		{/if}
 
-		<!-- Completion modal -->
-		<Modal show={showCompletionModal} title={phase.completion ? i18n.localized(phase.completion.title) : i18n.platform('survey.completion_title')} onclose={() => { showCompletionModal = false; }}>
-			<p class="text-gray-600 mb-4">
-				{phase.completion ? i18n.localized(phase.completion.body) : i18n.platform('survey.completion_body')}
-			</p>
-			{@const nextPhase = resolveNextPhase()}
-			<div class="flex gap-3">
-				{#if nextPhase}
-					<!-- Next phase within same chunk (or non-chunked) -->
-					<button
-						class="flex-1 bg-indigo-600 text-white py-2 px-4 rounded hover:bg-indigo-700 cursor-pointer"
-						onclick={() => { showCompletionModal = false; goto(phaseUrl(nextPhase.slug)); }}
-					>
-						{phase.completion?.nextPhaseButton ? i18n.localized(phase.completion.nextPhaseButton) : i18n.platform('survey.next_phase')}
-					</button>
-				{:else if nextChunkUrl}
-					<!-- Last phase of this chunk — next chunk button with optional countdown -->
-					{#if nextChunkCountdownSecs > 0}
-						{@const m = Math.floor(nextChunkCountdownSecs / 60)}
-						{@const s = nextChunkCountdownSecs % 60}
-						<button disabled class="flex-1 bg-indigo-300 text-white py-2 px-4 rounded cursor-not-allowed select-none">
-							Next chunk in {m > 0 ? `${m}m ` : ''}{s}s
-						</button>
-					{:else}
-						<button
-							class="flex-1 bg-indigo-600 text-white py-2 px-4 rounded hover:bg-indigo-700 cursor-pointer"
-							onclick={() => { showCompletionModal = false; goto(nextChunkUrl); }}
-						>
-							Start next chunk →
-						</button>
-					{/if}
-				{:else}
-					<!-- Last phase, last chunk (or no chunking) — finish experiment -->
-					<button
-						class="flex-1 bg-indigo-600 text-white py-2 px-4 rounded hover:bg-indigo-700 cursor-pointer"
-						onclick={() => { showCompletionModal = false; window.location.href = `/e/${slug}/complete`; }}
-					>
-						{phase.completion?.nextPhaseButton ? i18n.localized(phase.completion.nextPhaseButton) : i18n.platform('survey.finish_experiment')}
-					</button>
-				{/if}
-				{#if phase.allowRevisit !== false}
-					<button
-						class="flex-1 bg-gray-200 text-gray-700 py-2 px-4 rounded hover:bg-gray-300 cursor-pointer"
-						onclick={() => { showCompletionModal = false; }}
-					>
-						{phase.completion?.stayButton ? i18n.localized(phase.completion.stayButton) : i18n.platform('survey.stay_on_page')}
-					</button>
-				{/if}
-			</div>
-		</Modal>
+		<!-- Completion modal. Variants disambiguated by `completionState.kind`
+		     in the script; the component is a single switch on `state.kind`.
+		     Navigation callbacks stay here (parent owns SvelteKit's `goto`). -->
+		<CompletionModal
+			show={showCompletionModal}
+			state={completionState}
+			copy={completionCopy}
+			allowStay={phase.allowRevisit !== false}
+			stayLabel={phase.completion?.stayButton ?? null}
+			onContinue={() => {
+				showCompletionModal = false;
+				if (completionState.kind === 'next-phase') goto(phaseUrl(completionState.phase.slug));
+				else if (completionState.kind === 'next-chunk-ready') goto(completionState.url);
+			}}
+			onFinish={() => {
+				showCompletionModal = false;
+				window.location.href = `/e/${slug}/complete`;
+			}}
+			onStay={() => (showCompletionModal = false)}
+			onClose={() => (showCompletionModal = false)}
+		/>
 
 		<!-- No review items message -->
 	{:else if isReviewPhase && items.length === 0}

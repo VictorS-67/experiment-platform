@@ -1,5 +1,7 @@
 <script lang="ts">
 	import LocalizedInput from '../LocalizedInput.svelte';
+	import FormInput from '../FormInput.svelte';
+	import AddButton from '../AddButton.svelte';
 	import Field from './Field.svelte';
 	import { updatePath, phaseTypes, orderTypes, widgetTypes } from './helpers';
 	import type { ExperimentConfig } from '$lib/config/schema';
@@ -209,7 +211,7 @@
 						{#if phase.introduction}
 							<button type="button" onclick={() => { delete config.phases[pi].introduction; }} class="text-xs text-red-500 hover:text-red-700 cursor-pointer">Remove</button>
 						{:else}
-							<button type="button" onclick={() => { config.phases[pi].introduction = { title: Object.fromEntries(languages.map((l) => [l, ''])), body: Object.fromEntries(languages.map((l) => [l, ''])) }; }} class="text-xs px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100 cursor-pointer">+ Add</button>
+							<AddButton onclick={() => { config.phases[pi].introduction = { title: Object.fromEntries(languages.map((l) => [l, ''])), body: Object.fromEntries(languages.map((l) => [l, ''])) }; }} />
 						{/if}
 					</div>
 					{#if phase.introduction}
@@ -228,7 +230,7 @@
 							{#if phase.gatekeeperQuestion}
 								<button type="button" onclick={() => { delete config.phases[pi].gatekeeperQuestion; config.phases[pi] = config.phases[pi]; }} class="text-xs text-red-500 hover:text-red-700 cursor-pointer">Remove</button>
 							{:else}
-								<button type="button" onclick={() => {
+								<AddButton onclick={() => {
 									config.phases[pi].gatekeeperQuestion = {
 										initial: {
 											text: Object.fromEntries(languages.map((l) => [l, ''])),
@@ -237,7 +239,7 @@
 										},
 										skipToNext: true
 									};
-								}} class="text-xs px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100 cursor-pointer">+ Add</button>
+								}} />
 							{/if}
 						</div>
 						{#if phase.gatekeeperQuestion}
@@ -256,13 +258,13 @@
 										{#if phase.gatekeeperQuestion.subsequent}
 											<button type="button" onclick={() => { delete config.phases[pi].gatekeeperQuestion!.subsequent; config.phases[pi] = config.phases[pi]; }} class="text-xs text-red-500 hover:text-red-700 cursor-pointer">Remove</button>
 										{:else}
-											<button type="button" onclick={() => {
+											<AddButton onclick={() => {
 												config.phases[pi].gatekeeperQuestion!.subsequent = {
 													text: Object.fromEntries(languages.map((l) => [l, ''])),
 													yesLabel: Object.fromEntries(languages.map((l) => [l, l === 'en' ? 'Yes, add another' : 'はい、追加'])),
 													noLabel: Object.fromEntries(languages.map((l) => [l, l === 'en' ? 'No, done' : 'いいえ、完了']))
 												};
-											}} class="text-xs px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100 cursor-pointer">+ Add</button>
+											}} />
 										{/if}
 									</div>
 									{#if phase.gatekeeperQuestion.subsequent}
@@ -349,7 +351,7 @@
 				<div class="border-t border-gray-100 pt-3 mt-3">
 					<div class="flex items-center justify-between mb-2">
 						<h5 class="text-xs font-medium text-gray-500">Response Widgets ({phaseWidgets.length})</h5>
-						<button type="button" onclick={() => addWidget(pi)} class="text-xs px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100 cursor-pointer">+ Add</button>
+						<AddButton onclick={() => addWidget(pi)} />
 					</div>
 
 					{#each phaseWidgets as widget, wi}
@@ -403,7 +405,7 @@
 								<div class="border-t border-gray-100 pt-2 mt-2">
 									<div class="flex items-center justify-between mb-1">
 										<span class="text-xs text-gray-500">Options ({widget.config?.options?.length ?? 0})</span>
-										<button type="button" onclick={() => addWidgetOption(pi, wi)} class="text-xs px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100 cursor-pointer">+ Add</button>
+										<AddButton onclick={() => addWidgetOption(pi, wi)} />
 									</div>
 									{#each widget.config?.options ?? [] as option, oi}
 										{@const optPath = [...widgetPath(pi, wi, 'config'), 'options', String(oi)]}
@@ -427,20 +429,17 @@
 									<span class="text-xs text-gray-500 block mb-1">Range config</span>
 									<div class="grid grid-cols-3 gap-2">
 										<Field label="Min">
-											<input type="number" value={widget.config?.min ?? (widget.type === 'likert' ? 1 : 0)}
-												oninput={(e) => update([...widgetPath(pi, wi, 'config'), 'min'], e.currentTarget.valueAsNumber)}
-												class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+											<FormInput type="number" size="xs" value={widget.config?.min ?? (widget.type === 'likert' ? 1 : 0)}
+												oninput={(v) => update([...widgetPath(pi, wi, 'config'), 'min'], Number(v))} />
 										</Field>
 										<Field label="Max">
-											<input type="number" value={widget.config?.max ?? (widget.type === 'likert' ? 7 : 100)}
-												oninput={(e) => update([...widgetPath(pi, wi, 'config'), 'max'], e.currentTarget.valueAsNumber)}
-												class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+											<FormInput type="number" size="xs" value={widget.config?.max ?? (widget.type === 'likert' ? 7 : 100)}
+												oninput={(v) => update([...widgetPath(pi, wi, 'config'), 'max'], Number(v))} />
 										</Field>
 										{#if widget.type === 'slider'}
 											<Field label="Step">
-												<input type="number" value={widget.config?.step ?? 1}
-													oninput={(e) => update([...widgetPath(pi, wi, 'config'), 'step'], e.currentTarget.valueAsNumber)}
-													class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+												<FormInput type="number" size="xs" value={widget.config?.step ?? 1}
+													oninput={(v) => update([...widgetPath(pi, wi, 'config'), 'step'], Number(v))} />
 											</Field>
 										{/if}
 									</div>
@@ -462,14 +461,12 @@
 									</label>
 									<div class="grid grid-cols-2 gap-2">
 										<Field label="Min length">
-											<input type="number" value={widget.config?.minLength ?? ''}
-												oninput={(e) => update([...widgetPath(pi, wi, 'config'), 'minLength'], e.currentTarget.value ? e.currentTarget.valueAsNumber : undefined)}
-												class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+											<FormInput type="number" size="xs" value={widget.config?.minLength ?? ''}
+												oninput={(v) => update([...widgetPath(pi, wi, 'config'), 'minLength'], v ? Number(v) : undefined)} />
 										</Field>
 										<Field label="Max length">
-											<input type="number" value={widget.config?.maxLength ?? ''}
-												oninput={(e) => update([...widgetPath(pi, wi, 'config'), 'maxLength'], e.currentTarget.value ? e.currentTarget.valueAsNumber : undefined)}
-												class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+											<FormInput type="number" size="xs" value={widget.config?.maxLength ?? ''}
+												oninput={(v) => update([...widgetPath(pi, wi, 'config'), 'maxLength'], v ? Number(v) : undefined)} />
 										</Field>
 									</div>
 								</div>
@@ -481,19 +478,16 @@
 									<span class="text-xs text-gray-500 block mb-1">Number config</span>
 									<div class="grid grid-cols-3 gap-2">
 										<Field label="Min">
-											<input type="number" value={widget.config?.min ?? ''}
-												oninput={(e) => update([...widgetPath(pi, wi, 'config'), 'min'], e.currentTarget.value ? e.currentTarget.valueAsNumber : undefined)}
-												class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+											<FormInput type="number" size="xs" value={widget.config?.min ?? ''}
+												oninput={(v) => update([...widgetPath(pi, wi, 'config'), 'min'], v ? Number(v) : undefined)} />
 										</Field>
 										<Field label="Max">
-											<input type="number" value={widget.config?.max ?? ''}
-												oninput={(e) => update([...widgetPath(pi, wi, 'config'), 'max'], e.currentTarget.value ? e.currentTarget.valueAsNumber : undefined)}
-												class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+											<FormInput type="number" size="xs" value={widget.config?.max ?? ''}
+												oninput={(v) => update([...widgetPath(pi, wi, 'config'), 'max'], v ? Number(v) : undefined)} />
 										</Field>
 										<Field label="Step">
-											<input type="number" value={widget.config?.step ?? 1}
-												oninput={(e) => update([...widgetPath(pi, wi, 'config'), 'step'], e.currentTarget.valueAsNumber)}
-												class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+											<FormInput type="number" size="xs" value={widget.config?.step ?? 1}
+												oninput={(v) => update([...widgetPath(pi, wi, 'config'), 'step'], Number(v))} />
 										</Field>
 									</div>
 								</div>
@@ -548,11 +542,11 @@
 												delete widgets[wi].conditionalOn;
 											}} class="text-xs text-red-500 hover:text-red-700 cursor-pointer">Remove</button>
 										{:else}
-											<button type="button" onclick={() => {
+											<AddButton onclick={() => {
 												const widgets = getWidgetsForPhase(pi);
 												const others = phaseWidgets.filter((_, j) => j !== wi);
 												widgets[wi].conditionalOn = { widgetId: others[0]?.id ?? '', value: '' };
-											}} class="text-xs px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100 cursor-pointer">+ Add</button>
+											}} />
 										{/if}
 									</div>
 									{#if widget.conditionalOn}
@@ -592,7 +586,7 @@
 							{#if phase.completion.nextPhaseButton}
 								<button type="button" onclick={() => { delete config.phases[pi].completion.nextPhaseButton; }} class="text-xs text-red-500 hover:text-red-700 cursor-pointer">Remove</button>
 							{:else}
-								<button type="button" onclick={() => { config.phases[pi].completion.nextPhaseButton = Object.fromEntries(languages.map((l) => [l, ''])); }} class="text-xs px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100 cursor-pointer">+ Customize</button>
+								<AddButton label="+ Customize" onclick={() => { config.phases[pi].completion.nextPhaseButton = Object.fromEntries(languages.map((l) => [l, ''])); }} />
 							{/if}
 						</div>
 						{#if phase.completion.nextPhaseButton}
@@ -605,7 +599,7 @@
 							{#if phase.completion.stayButton}
 								<button type="button" onclick={() => { delete config.phases[pi].completion.stayButton; }} class="text-xs text-red-500 hover:text-red-700 cursor-pointer">Remove</button>
 							{:else}
-								<button type="button" onclick={() => { config.phases[pi].completion.stayButton = Object.fromEntries(languages.map((l) => [l, ''])); }} class="text-xs px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100 cursor-pointer">+ Customize</button>
+								<AddButton label="+ Customize" onclick={() => { config.phases[pi].completion.stayButton = Object.fromEntries(languages.map((l) => [l, ''])); }} />
 							{/if}
 						</div>
 						{#if phase.completion.stayButton}
@@ -619,7 +613,7 @@
 					<div class="border-t border-gray-100 pt-3 mt-3">
 						<div class="flex items-center justify-between mb-2">
 							<h5 class="text-xs font-medium text-gray-500">Skip Rules ({phase.skipRules?.length ?? 0})</h5>
-							<button type="button" onclick={() => addSkipRule(pi)} class="text-xs px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100 cursor-pointer">+ Add</button>
+							<AddButton onclick={() => addSkipRule(pi)} />
 						</div>
 						{#if phase.skipRules?.length}
 							<p class="text-xs text-gray-400 mb-2">Skip a stimulus when a response condition is met.</p>
@@ -687,7 +681,7 @@
 				<div class="border-t border-gray-100 pt-3 mt-3">
 					<div class="flex items-center justify-between mb-2">
 						<h5 class="text-xs font-medium text-gray-500">Branch Rules ({phase.branchRules?.length ?? 0})</h5>
-						<button type="button" onclick={() => addBranchRule(pi)} class="text-xs px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100 cursor-pointer">+ Add</button>
+						<AddButton onclick={() => addBranchRule(pi)} />
 					</div>
 					{#if phase.branchRules?.length}
 						<p class="text-xs text-gray-400 mb-2">Override next phase based on responses. First match wins; fallback is sequential.</p>

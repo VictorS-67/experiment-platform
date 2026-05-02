@@ -64,13 +64,19 @@ ExperimentConfig
 │   ├── type: "video" | "image" | "audio" | "text" | "mixed"
 │   ├── source: "upload" | "external-urls" | "supabase-storage"
 │   ├── storagePath: string?
+│   ├── metadataKeys: string[]?                          # Editable list driving balance auto-gen + bulk import metadata columns
 │   ├── items: StimulusItem[]
 │   │   ├── id, type?, url?, filename?
 │   │   ├── label: LocalizedString?
-│   │   └── metadata: Record<string, any>?
+│   │   ├── metadata: Record<string, string|number|boolean|null>?
+│   │   └── isAnchor: boolean?                            # Test-retest anchor — replicated once per chunk
 │   └── chunking?: ChunkingConfig
-│       ├── enabled: boolean, blockOrder, withinBlockOrder
-│       ├── breakScreen?: { title, body, duration? }
+│       ├── enabled: boolean
+│       ├── chunkOrder: "sequential" | "latin-square" | "random-per-participant"  # default sequential
+│       ├── blockOrder: "sequential" | "latin-square" | "random-per-participant"
+│       ├── withinBlockOrder: "sequential" | "random" | "random-per-participant"
+│       ├── minBreakMinutes: number?
+│       ├── breakScreen?: { title?, body?, duration?, disabled? }   # All optional; falls back to platform defaults `survey.break_default_*`
 │       └── chunks: [{ id, slug, label?, blocks: [{ id, label?, stimulusIds }] }]
 └── completion?
     ├── title, body: LocalizedString
@@ -111,6 +117,19 @@ ExperimentConfig
 Shared optional fields: `conditionalOn`, `stepNumber`, `stepLabel`, `placeholder`.
 
 **Timestamp-range detail**: Internally stores `"start,end"` comma-separated, split into `_start`/`_end` keys on save. `ReviewItemDisplay` detects pairs via hyphen-delimited regex and shows replay button.
+
+## Sentinel keys in `response_data`
+
+Beyond user-defined widget keys, the `response_data` JSONB blob can hold platform-injected metadata under `_`-prefixed keys (the sentinel convention):
+
+| Key | Set by | Purpose |
+|-----|--------|---------|
+| `_chunk` | client save call (any chunked URL) | Records which chunk visit this response came from. Lynchpin of per-chunk anchor accounting and CSV-export-friendly chunk attribution. |
+| `_timestamp` | (legacy) | Was previously injected by some clients; current code paths don't add it but the filter convention preserves it for backward compat. |
+
+All consumers that iterate widget keys must filter `!k.startsWith('_')` before treating values as widget answers. The save endpoint (`save/+server.ts`) explicitly bypasses `_`-prefixed keys in widget-ID validation. Adding a new sentinel later is a matter of injection + documentation; the filter convention picks it up automatically.
+
+**Anchor behaviour** (`StimulusItem.isAnchor: true`): the auto-generator pulls anchors out of the regular pool and replicates them once per chunk. At runtime, the canonical `chunkCompletion: Map<id, 'completed' | 'skipped'>` derivation in the phase page treats an anchor as "done in this chunk" only when a response with `_chunk === currentChunkSlug` exists — so the gatekeeper engages fresh, the StimulusNav button stays neutral, and the saved-responses card hides prior-chunk ratings (test-retest blinding). Legacy responses without `_chunk` are treated as belonging to the participant's first chunk in their resolved order.
 
 ## Stimulus Naming
 

@@ -52,10 +52,11 @@
       "type": "stimulus-response",
       "title": { "en": "Main phase" },
       "gatekeeperQuestion": {
-        "text": { "en": "Have you seen this before?" },
-        "yesLabel": { "en": "Yes" },
-        "noLabel": { "en": "No" },
-        "noResponseValue": "never_seen",
+        "initial": {
+          "text": { "en": "Have you seen this before?" },
+          "yesLabel": { "en": "Yes" },
+          "noLabel": { "en": "No" }
+        },
         "skipToNext": true
       },
       "responseWidgets": [

@@ -1,16 +1,11 @@
-import { test, expect, loginAsAdmin } from './fixtures';
+import { test, expect, loginAsAdmin, createTestExperiment } from './fixtures';
 
 test.describe('Collaborators (Phase C)', () => {
 	test('creator becomes sole owner, can invite by email, and pending-invite claim link is surfaced', async ({ page, ctx }) => {
 		await loginAsAdmin(page, ctx);
 
 		// Create a fresh experiment via the admin UI.
-		await page.goto('/admin/experiments/new');
-		const slug = `e2e-collab-${Date.now()}`;
-		await page.getByLabel(/slug/i).fill(slug);
-		await page.getByLabel(/title \(english\)/i).fill('Collab Test');
-		await page.getByRole('button', { name: /create/i }).click();
-		await page.waitForURL(/\/admin\/experiments\/[0-9a-f-]+/);
+		await createTestExperiment(page, 'e2e-collab', 'Collab Test');
 
 		// Jump to settings — the CollaboratorsPanel lives there.
 		await page.getByRole('link', { name: /settings/i }).first().click();

@@ -1,6 +1,9 @@
 import { getServerSupabase } from './supabase';
+import { unwrap, unwrapVoid } from './db';
 import { listAccessibleExperimentIds } from './collaborators';
 import { ExperimentConfigSchema, type ExperimentConfig } from '$lib/config/schema';
+import { resolveChunkOrder } from '$lib/utils';
+import { isStimulusDoneInChunk } from '$lib/utils/response-data';
 
 /**
  * Parse and validate raw JSONB config loaded from the database. Throws if it
@@ -19,13 +22,14 @@ export async function listExperiments(adminUserId: string) {
 	const accessibleIds = await listAccessibleExperimentIds(adminUserId);
 	if (accessibleIds.length === 0) return [];
 
-	const { data: experiments, error } = await supabase
-		.from('experiments')
-		.select('id, slug, status, config, created_at, updated_at')
-		.in('id', accessibleIds)
-		.order('created_at', { ascending: false });
-
-	if (error) { console.error('Failed to list experiments:', error); throw new Error('Failed to list experiments'); }
+	const experiments = unwrap(
+		await supabase
+			.from('experiments')
+			.select('id, slug, status, config, created_at, updated_at')
+			.in('id', accessibleIds)
+			.order('created_at', { ascending: false }),
+		'Failed to list experiments'
+	);
 
 	// Participant counts via the experiment_participant_counts view
 	// (migration 020) — one aggregate scan instead of streaming every row.
@@ -39,7 +43,7 @@ export async function listExperiments(adminUserId: string) {
 		countMap[row.experiment_id as string] = row.participant_count as number;
 	}
 
-	return (experiments || []).map((exp) => ({
+	return experiments.map((exp) => ({
 		id: exp.id,
 		slug: exp.slug,
 		status: exp.status,
@@ -103,27 +107,36 @@ export async function updateExperiment(
 	if (updates.status !== undefined) updateData.status = updates.status;
 	if (updates.slug !== undefined) updateData.slug = updates.slug;
 
-	const { error } = await supabase
-		.from('experiments')
-		.update(updateData)
-		.eq('id', id);
+	unwrapVoid(
+		await supabase.from('experiments').update(updateData).eq('id', id),
+		'Failed to update experiment'
+	);
+}
 
-	if (error) { console.error('Failed to update experiment:', error); throw new Error('Failed to update experiment'); }
+/**
+ * Best-effort UI naming: probes `experiments.slug` until it finds an unused
+ * value of the form `<base>`, `<base>-2`, `<base>-3`, ... The DB unique
+ * constraint is the actual safety net — if a concurrent request grabs the
+ * slug between probe and insert, the subsequent INSERT raises 23505 and the
+ * caller surfaces "Slug already taken".
+ */
+async function findUniqueSlug(base: string): Promise<string> {
+	const supabase = getServerSupabase();
+	let candidate = base;
+	let attempt = 1;
+	while (true) {
+		const { data } = await supabase.from('experiments').select('id').eq('slug', candidate).maybeSingle();
+		if (!data) return candidate;
+		attempt++;
+		candidate = `${base}-${attempt}`;
+	}
 }
 
 export async function duplicateExperiment(id: string, duplicatedBy: string) {
-	const supabase = getServerSupabase();
 	const source = await getExperiment(id);
 	if (!source) throw new Error('Experiment not found');
 
-	let newSlug = `${source.slug}-copy`;
-	let attempt = 1;
-	while (true) {
-		const { data } = await supabase.from('experiments').select('id').eq('slug', newSlug).maybeSingle();
-		if (!data) break;
-		attempt++;
-		newSlug = `${source.slug}-copy-${attempt}`;
-	}
+	const newSlug = await findUniqueSlug(`${source.slug}-copy`);
 
 	// Validate the source config before copying — if it's a stale config that
 	// no longer matches the current schema, fail loudly here rather than
@@ -135,22 +148,10 @@ export async function duplicateExperiment(id: string, duplicatedBy: string) {
 
 export async function deleteExperiment(id: string) {
 	const supabase = getServerSupabase();
-	const { error } = await supabase
-		.from('experiments')
-		.delete()
-		.eq('id', id);
-
-	if (error) { console.error('Failed to delete experiment:', error); throw new Error('Failed to delete experiment'); }
-}
-
-export async function saveConfigVersion(experimentId: string, config: ExperimentConfig) {
-	parseStoredConfig(config);
-	const supabase = getServerSupabase();
-	const { error } = await supabase.rpc('insert_config_version', {
-		exp_id: experimentId,
-		cfg: config
-	});
-	if (error) { console.error('Failed to save config version:', error); throw new Error('Failed to save config version'); }
+	unwrapVoid(
+		await supabase.from('experiments').delete().eq('id', id),
+		'Failed to delete experiment'
+	);
 }
 
 /**
@@ -199,14 +200,14 @@ export async function saveConfigWithVersion(
 
 export async function listConfigVersions(experimentId: string) {
 	const supabase = getServerSupabase();
-	const { data, error } = await supabase
-		.from('experiment_config_versions')
-		.select('id, version_number, created_at')
-		.eq('experiment_id', experimentId)
-		.order('version_number', { ascending: false });
-
-	if (error) { console.error('Failed to list config versions:', error); throw new Error('Failed to list config versions'); }
-	return data || [];
+	return unwrap(
+		await supabase
+			.from('experiment_config_versions')
+			.select('id, version_number, created_at')
+			.eq('experiment_id', experimentId)
+			.order('version_number', { ascending: false }),
+		'Failed to list config versions'
+	);
 }
 
 export async function rollbackToVersion(
@@ -239,17 +240,18 @@ export async function rollbackToVersion(
 
 export async function getParticipants(experimentId: string) {
 	const supabase = getServerSupabase();
-	const { data, error } = await supabase
-		.from('participants')
-		.select('id, email, registration_data, registered_at')
-		.eq('experiment_id', experimentId)
-		.order('registered_at', { ascending: false });
-
-	if (error) { console.error('Failed to load participants:', error); throw new Error('Failed to load participants'); }
+	const data = unwrap(
+		await supabase
+			.from('participants')
+			.select('id, email, registration_data, registered_at')
+			.eq('experiment_id', experimentId)
+			.order('registered_at', { ascending: false }),
+		'Failed to load participants'
+	);
 
 	// Response counts via participant_response_counts view (migration 020).
 	// Scoped to just the participants we're about to return.
-	const participantIds = (data ?? []).map((p) => p.id);
+	const participantIds = data.map((p) => p.id);
 	const countMap: Record<string, number> = {};
 	if (participantIds.length) {
 		const { data: counts } = await supabase
@@ -261,7 +263,7 @@ export async function getParticipants(experimentId: string) {
 		}
 	}
 
-	return (data || []).map((p) => ({
+	return data.map((p) => ({
 		...p,
 		responseCount: countMap[p.id] || 0
 	}));
@@ -314,6 +316,92 @@ export async function getParticipantDetail(participantId: string, experimentId?:
 	return { participant, responsesByPhase };
 }
 
+/**
+ * Returns one row per chunk this participant has responded to, with start/end
+ * timestamps and duration. Used to surface session timing on the admin
+ * participant detail page (for payment tracking on multi-session studies).
+ *
+ * Pure compute over the existing `responses` rows — no schema changes. Each
+ * response's chunk membership is resolved by looking up its stimulus_id in
+ * the experiment config's `stimuli.chunking.chunks[].blocks[].stimulusIds`.
+ */
+export async function getParticipantSessionTimings(
+	experimentId: string,
+	participantId: string
+): Promise<Array<{
+	chunkSlug: string;
+	chunkLabel?: Record<string, string>;
+	startedAt: string;
+	endedAt: string;
+	durationSeconds: number;
+	responseCount: number;
+}>> {
+	const supabase = getServerSupabase();
+
+	const { data: experiment, error: eErr } = await supabase
+		.from('experiments')
+		.select('config')
+		.eq('id', experimentId)
+		.single();
+	if (eErr || !experiment) return [];
+
+	type Chunk = { id: string; slug: string; label?: Record<string, string>; blocks: Array<{ stimulusIds?: string[] }> };
+	const chunks: Chunk[] = (experiment.config as { stimuli?: { chunking?: { chunks?: Chunk[] } } })?.stimuli?.chunking?.chunks ?? [];
+	if (chunks.length === 0) return [];
+
+	// Map stimulus_id → chunk_slug for non-anchor stimuli (each appears in
+	// exactly one chunk). Anchors appear in MULTIPLE chunks, so the map's
+	// last write wins — meaning we'd misattribute every anchor response. For
+	// anchor responses, prefer the `_chunk` sentinel in response_data
+	// instead. Legacy responses without `_chunk` fall through to the map.
+	const validChunkSlugs = new Set(chunks.map((c) => c.slug));
+	const stimulusToChunkSlug = new Map<string, string>();
+	for (const c of chunks) {
+		for (const b of c.blocks ?? []) {
+			for (const id of b.stimulusIds ?? []) stimulusToChunkSlug.set(id, c.slug);
+		}
+	}
+
+	const { data: responses, error: rErr } = await supabase
+		.from('responses')
+		.select('stimulus_id, response_data, created_at')
+		.eq('participant_id', participantId)
+		.eq('experiment_id', experimentId)
+		.order('created_at', { ascending: true });
+	if (rErr || !responses) return [];
+
+	const byChunk = new Map<string, { startedAt: string; endedAt: string; count: number }>();
+	for (const r of responses) {
+		const rd = r.response_data as Record<string, unknown> | null;
+		const tagged = typeof rd?._chunk === 'string' && validChunkSlugs.has(rd._chunk) ? rd._chunk : null;
+		const slug = tagged ?? stimulusToChunkSlug.get(r.stimulus_id);
+		if (!slug) continue; // response references a stimulus not in any chunk (e.g. legacy)
+		const existing = byChunk.get(slug);
+		if (existing) {
+			if (r.created_at < existing.startedAt) existing.startedAt = r.created_at;
+			if (r.created_at > existing.endedAt) existing.endedAt = r.created_at;
+			existing.count++;
+		} else {
+			byChunk.set(slug, { startedAt: r.created_at, endedAt: r.created_at, count: 1 });
+		}
+	}
+
+	const labelBySlug = new Map(chunks.map((c) => [c.slug, c.label]));
+	const out = [...byChunk.entries()].map(([chunkSlug, agg]) => ({
+		chunkSlug,
+		chunkLabel: labelBySlug.get(chunkSlug),
+		startedAt: agg.startedAt,
+		endedAt: agg.endedAt,
+		durationSeconds: Math.max(
+			0,
+			Math.round((new Date(agg.endedAt).getTime() - new Date(agg.startedAt).getTime()) / 1000)
+		),
+		responseCount: agg.count
+	}));
+	out.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+	return out;
+}
+
 // All three helpers below run under the service-role key, which bypasses RLS.
 // The route-level requireExperimentAccess() gate authorizes the *caller* on
 // a specific experiment, but the helpers themselves must re-bind their query
@@ -322,12 +410,14 @@ export async function getParticipantDetail(participantId: string, experimentId?:
 
 export async function deleteParticipant(experimentId: string, participantId: string) {
 	const supabase = getServerSupabase();
-	const { error } = await supabase
-		.from('participants')
-		.delete()
-		.eq('id', participantId)
-		.eq('experiment_id', experimentId);
-	if (error) { console.error('Failed to delete participant:', error); throw new Error('Failed to delete participant'); }
+	unwrapVoid(
+		await supabase
+			.from('participants')
+			.delete()
+			.eq('id', participantId)
+			.eq('experiment_id', experimentId),
+		'Failed to delete participant'
+	);
 }
 
 export async function resetParticipantResponses(experimentId: string, participantId: string) {
@@ -346,19 +436,23 @@ export async function resetParticipantResponses(experimentId: string, participan
 	if (lookupErr) { console.error('Failed to verify participant ownership:', lookupErr); throw new Error('Failed to reset responses'); }
 	if (!owner) throw new Error('Participant not found');
 
-	const { error } = await supabase.from('responses').delete().eq('participant_id', participantId);
-	if (error) { console.error('Failed to reset responses:', error); throw new Error('Failed to reset responses'); }
+	unwrapVoid(
+		await supabase.from('responses').delete().eq('participant_id', participantId),
+		'Failed to reset responses'
+	);
 }
 
 export async function deleteParticipants(experimentId: string, participantIds: string[]) {
 	if (participantIds.length === 0) return;
 	const supabase = getServerSupabase();
-	const { error } = await supabase
-		.from('participants')
-		.delete()
-		.in('id', participantIds)
-		.eq('experiment_id', experimentId);
-	if (error) { console.error('Failed to delete participants:', error); throw new Error('Failed to delete participants'); }
+	unwrapVoid(
+		await supabase
+			.from('participants')
+			.delete()
+			.in('id', participantIds)
+			.eq('experiment_id', experimentId),
+		'Failed to delete participants'
+	);
 }
 
 export async function getExperimentStats(experimentId: string) {
@@ -392,41 +486,100 @@ export async function getExperimentStats(experimentId: string) {
 	};
 }
 
+type ChunkProgressEntry = { slug: string; complete: boolean; respondedCount: number; totalCount: number; completedAt: string | null };
+type ChunkProgressResult = {
+	progress: ChunkProgressEntry[];
+	nextChunk: { slug: string; canStartAt: string | null } | null;
+};
+
 export async function getChunkProgress(
 	experimentId: string,
 	chunks: Array<{ slug: string; blocks: Array<{ stimulusIds: string[] }> }>,
-	minBreakMinutes?: number
-): Promise<Map<string, Array<{ slug: string; complete: boolean; respondedCount: number; totalCount: number; completedAt: string | null; canStartNextAt: string | null }>>> {
+	minBreakMinutes?: number,
+	chunkOrder: 'sequential' | 'latin-square' | 'random-per-participant' = 'sequential',
+	stimulusItems?: Array<{ id: string; isAnchor?: boolean }>
+): Promise<Map<string, ChunkProgressResult>> {
 	const supabase = getServerSupabase();
-	const { data: responses } = await supabase
-		.from('responses')
-		.select('participant_id, stimulus_id, created_at')
-		.eq('experiment_id', experimentId);
 
-	// Build: participantId → Map<stimulusId, latest created_at>
-	const byParticipant = new Map<string, Map<string, string>>();
-	for (const r of responses ?? []) {
-		if (!byParticipant.has(r.participant_id)) byParticipant.set(r.participant_id, new Map());
-		const existing = byParticipant.get(r.participant_id)!.get(r.stimulus_id);
-		if (!existing || r.created_at > existing) byParticipant.get(r.participant_id)!.set(r.stimulus_id, r.created_at);
+	// Bulk-rank participants by registration order ONCE — avoids the N×2 DB
+	// calls that would result from looping `getParticipantIndex` per participant.
+	const { data: rankedParticipants } = await supabase
+		.from('participants')
+		.select('id')
+		.eq('experiment_id', experimentId)
+		.order('registered_at', { ascending: true });
+	const indexById = new Map<string, number>();
+	for (let i = 0; i < (rankedParticipants ?? []).length; i++) {
+		indexById.set(rankedParticipants![i].id, i);
 	}
 
-	const result = new Map<string, ReturnType<typeof getChunkProgress> extends Promise<Map<string, infer V>> ? V : never>();
-	for (const [participantId, respondedAt] of byParticipant) {
-		let prevCompletedAt: string | null = null;
-		const progress = chunks.map((chunk) => {
+	const itemMap = new Map((stimulusItems ?? []).map((s) => [s.id, s]));
+
+	const { data: responses } = await supabase
+		.from('responses')
+		.select('participant_id, stimulus_id, response_data, created_at')
+		.eq('experiment_id', experimentId);
+
+	// Group per-participant per-stimulus so the shared
+	// `isStimulusDoneInChunk` helper can answer "is this anchor satisfied
+	// for this chunk?" identically to the participant flow.
+	type Resp = { stimulus_id: string; response_data: Record<string, unknown>; created_at: string };
+	const byParticipant = new Map<string, { latestAtByStim: Map<string, string>; responsesByStim: Map<string, Resp[]> }>();
+	for (const r of responses ?? []) {
+		let state = byParticipant.get(r.participant_id);
+		if (!state) {
+			state = { latestAtByStim: new Map(), responsesByStim: new Map() };
+			byParticipant.set(r.participant_id, state);
+		}
+		const existing = state.latestAtByStim.get(r.stimulus_id);
+		if (!existing || r.created_at > existing) state.latestAtByStim.set(r.stimulus_id, r.created_at);
+		if (!state.responsesByStim.has(r.stimulus_id)) state.responsesByStim.set(r.stimulus_id, []);
+		state.responsesByStim.get(r.stimulus_id)!.push(r as Resp);
+	}
+
+	const result = new Map<string, ChunkProgressResult>();
+	for (const [participantId, state] of byParticipant) {
+		const { latestAtByStim, responsesByStim } = state;
+		// `progress[]` stays in array order so the admin's per-chunk chip
+		// display reads naturally (chunk-1, chunk-2, …) regardless of
+		// participant rotation. Only `nextChunk` is computed per-participant.
+		const progress: ChunkProgressEntry[] = chunks.map((chunk) => {
 			const allStimuli = chunk.blocks.flatMap((b) => b.stimulusIds);
-			const responded = allStimuli.filter((id) => respondedAt.has(id));
+			const responded = allStimuli.filter((id) => {
+				const stim = itemMap.get(id) ?? { id, isAnchor: false };
+				return isStimulusDoneInChunk(stim, chunk.slug, responsesByStim.get(id) ?? []);
+			});
 			const complete = allStimuli.length > 0 && responded.length === allStimuli.length;
-			const timestamps = responded.map((id) => respondedAt.get(id)!).filter(Boolean);
+			const timestamps = responded.map((id) => latestAtByStim.get(id)!).filter(Boolean);
 			const completedAt = complete && timestamps.length ? timestamps.sort().at(-1)! : null;
-			const canStartNextAt = prevCompletedAt && minBreakMinutes
-				? new Date(new Date(prevCompletedAt).getTime() + minBreakMinutes * 60 * 1000).toISOString()
-				: null;
-			if (complete && completedAt) prevCompletedAt = completedAt;
-			return { slug: chunk.slug, complete, respondedCount: responded.length, totalCount: allStimuli.length, completedAt, canStartNextAt };
+			return { slug: chunk.slug, complete, respondedCount: responded.length, totalCount: allStimuli.length, completedAt };
 		});
-		result.set(participantId, progress);
+
+		// Resolve this participant's chunk traversal order, then find their
+		// first incomplete chunk + the wall-clock time they can start it.
+		const orderedSlugs = resolveChunkOrder(
+			chunks.map((c) => c.slug),
+			chunkOrder,
+			indexById.get(participantId) ?? 0,
+			participantId
+		);
+		const progressBySlug = new Map(progress.map((p) => [p.slug, p]));
+		let prevCompletedAt: string | null = null;
+		let nextChunk: ChunkProgressResult['nextChunk'] = null;
+		for (const slug of orderedSlugs) {
+			const p = progressBySlug.get(slug);
+			if (!p) continue;
+			if (!p.complete) {
+				const canStartAt = prevCompletedAt && minBreakMinutes
+					? new Date(new Date(prevCompletedAt).getTime() + minBreakMinutes * 60 * 1000).toISOString()
+					: null;
+				nextChunk = { slug, canStartAt };
+				break;
+			}
+			if (p.completedAt) prevCompletedAt = p.completedAt;
+		}
+
+		result.set(participantId, { progress, nextChunk });
 	}
 	return result;
 }
@@ -443,16 +596,17 @@ export async function getResponseData(experimentId: string) {
 
 	if (!exp) throw new Error('Experiment not found');
 
-	const { data, error } = await supabase
-		.from('response_flat')
-		.select('*')
-		.eq('experiment_slug', exp.slug)
-		.order('created_at', { ascending: true });
-
-	if (error) { console.error('Failed to load response data:', error); throw new Error('Failed to load response data'); }
+	const data = unwrap(
+		await supabase
+			.from('response_flat')
+			.select('*')
+			.eq('experiment_slug', exp.slug)
+			.order('created_at', { ascending: true }),
+		'Failed to load response data'
+	);
 
 	// Fetch participant_id and registration_data for each unique participant email
-	const emails = [...new Set((data || []).map((r) => r.participant_email as string))];
+	const emails = [...new Set(data.map((r) => r.participant_email as string))];
 	const { data: participants } = await supabase
 		.from('participants')
 		.select('id, email, registration_data')

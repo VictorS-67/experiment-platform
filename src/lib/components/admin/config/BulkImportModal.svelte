@@ -46,6 +46,14 @@
 	let csvText = $state('');
 	let csvError = $state<string | null>(null);
 	let csvParsed = $state<{ headers: string[]; rows: Record<string, string>[] } | null>(null);
+	// Storage filenames cached for cross-checking CSV rows. Loaded lazily after a
+	// CSV is parsed (only when stimuli source is supabase-storage).
+	let csvStorageCheck = $state<{
+		state: 'idle' | 'loading' | 'done' | 'error';
+		files: Set<string>;
+		truncated: boolean;
+		error?: string;
+	}>({ state: 'idle', files: new Set(), truncated: false });
 
 	// --- Preview ---
 	let candidates = $state<StimulusItemCandidate[]>([]);
@@ -70,6 +78,7 @@
 			csvText = '';
 			csvError = null;
 			csvParsed = null;
+			csvStorageCheck = { state: 'idle', files: new Set(), truncated: false };
 			candidates = [];
 			selectedCandidates = new Set();
 			mergeStrategy = initialStrategy;
@@ -147,9 +156,42 @@
 				return;
 			}
 			csvParsed = result;
+			// Kick off a storage cross-check whenever the experiment is wired to a
+			// storage path. Lets us flag rows whose files don't exist before import,
+			// instead of letting the participant page 400 on a signed URL miss.
+			if (config.stimuli.source === 'supabase-storage' && config.stimuli.storagePath) {
+				void runStorageCheck();
+			}
 		} catch {
 			csvError = 'Failed to parse CSV';
 			csvParsed = null;
+		}
+	}
+
+	async function runStorageCheck() {
+		csvStorageCheck = { state: 'loading', files: new Set(), truncated: false };
+		try {
+			const path = config.stimuli.storagePath ?? '';
+			const res = await fetch(
+				`/admin/experiments/${experimentId}/storage-check?path=${encodeURIComponent(path)}&all=true`
+			);
+			const body = await res.json();
+			if (body.error) {
+				csvStorageCheck = { state: 'error', files: new Set(), truncated: false, error: body.error };
+			} else {
+				csvStorageCheck = {
+					state: 'done',
+					files: new Set<string>(body.files ?? []),
+					truncated: Boolean(body.truncated)
+				};
+			}
+		} catch {
+			csvStorageCheck = {
+				state: 'error',
+				files: new Set(),
+				truncated: false,
+				error: 'Failed to read storage'
+			};
 		}
 	}
 
@@ -180,12 +222,19 @@
 		}
 	}
 
+	// Generic toggle: returns a new Set with `member` toggled in/out. Used by
+	// both the storage-file selector (Set<filename>) and the preview-candidate
+	// selector (Set<id>) — they had byte-identical implementations.
+	function toggleSetMember<T>(set: Set<T>, member: T): Set<T> {
+		const next = new Set(set);
+		if (next.has(member)) next.delete(member);
+		else next.add(member);
+		return next;
+	}
+
 	// --- File selection ---
 	function toggleFile(filename: string) {
-		const next = new Set(selectedFiles);
-		if (next.has(filename)) next.delete(filename);
-		else next.add(filename);
-		selectedFiles = next;
+		selectedFiles = toggleSetMember(selectedFiles, filename);
 	}
 
 	function selectAllFiltered() {
@@ -209,28 +258,55 @@
 		const existingFilenames = new Set(config.stimuli.items.map(s => s.filename ?? ''));
 		const existingIds = new Set(config.stimuli.items.map(s => s.id));
 
-		if (importMode === 'storage') {
-			const files = [...selectedFiles];
-			// Build CSV data map if CSV is also loaded (combined mode)
-			let csvData: Map<string, Record<string, string>> | undefined;
-			if (csvParsed && csvParsed.rows.length > 0) {
-				csvData = new Map();
-				const metaCols = csvParsed.headers.filter(h => h !== 'filename' && h !== 'id');
-				for (const row of csvParsed.rows) {
-					const key = row.filename || row.id;
-					if (key) {
-						const meta: Record<string, string> = {};
-						for (const col of metaCols) {
-							if (row[col]) meta[col] = row[col];
-						}
-						csvData.set(key, meta);
-					}
+		// Build CSV-derived metadata + explicit-id + anchor-flag maps (used by both
+		// modes when a CSV is present). When the CSV has both `id` and `filename`
+		// columns, the explicit `id` wins so authors can hide compromising info
+		// that would otherwise be slugified out of the filename. When the CSV has
+		// an `isAnchor` column, truthy values flag the row as a test-retest anchor.
+		let csvData: Map<string, Record<string, string>> | undefined;
+		let idByFilename: Map<string, string> | undefined;
+		let anchorFilenames: Set<string> | undefined;
+		if (csvParsed && csvParsed.rows.length > 0) {
+			csvData = new Map();
+			idByFilename = new Map();
+			anchorFilenames = new Set();
+			const hasFilename = csvParsed.headers.includes('filename');
+			const hasId = csvParsed.headers.includes('id');
+			const hasAnchor = csvParsed.headers.includes('isAnchor');
+			const metaCols = csvParsed.headers.filter(
+				(h) => h !== 'filename' && h !== 'id' && h !== 'isAnchor'
+			);
+			for (const row of csvParsed.rows) {
+				const key = row.filename || row.id;
+				if (!key) continue;
+				const meta: Record<string, string> = {};
+				for (const col of metaCols) {
+					if (row[col]) meta[col] = row[col];
+				}
+				csvData.set(key, meta);
+				if (hasFilename && hasId && row.id?.trim()) {
+					idByFilename.set(row.filename, row.id.trim());
+				}
+				if (hasAnchor && /^(true|1|yes|y)$/i.test((row.isAnchor ?? '').trim())) {
+					anchorFilenames.add(key);
 				}
 			}
+		}
 
-			candidates = buildStimulusItems(files, {
+		// In CSV mode we cross-check filenames against the actual storage list
+		// (loaded after parse) so the preview can flag rows that would 404 at
+		// runtime. Skip the check in storage mode — the file list there IS storage.
+		const storageFilesForCheck =
+			importMode === 'csv' && csvStorageCheck.state === 'done'
+				? csvStorageCheck.files
+				: undefined;
+
+		if (importMode === 'storage') {
+			candidates = buildStimulusItems([...selectedFiles], {
 				patternRegex: patternResult?.regex,
 				csvData,
+				idByFilename,
+				anchorFilenames,
 				existingFilenames,
 				existingIds
 			});
@@ -238,28 +314,20 @@
 			// CSV-only mode
 			if (!csvParsed) return;
 			const files = csvParsed.rows.map(r => r.filename || r.id).filter(Boolean);
-			const csvData = new Map<string, Record<string, string>>();
-			const metaCols = csvParsed.headers.filter(h => h !== 'filename' && h !== 'id');
-			for (const row of csvParsed.rows) {
-				const key = row.filename || row.id;
-				if (key) {
-					const meta: Record<string, string> = {};
-					for (const col of metaCols) {
-						if (row[col]) meta[col] = row[col];
-					}
-					csvData.set(key, meta);
-				}
-			}
 			candidates = buildStimulusItems(files, {
 				csvData,
+				idByFilename,
+				anchorFilenames,
 				existingFilenames,
-				existingIds
+				existingIds,
+				storageFiles: storageFilesForCheck
 			});
 		}
 
-		// Default selection: all non-duplicates checked
+		// Default selection: non-duplicates that aren't missing from storage.
+		// Importing a missing row would create a stimulus that can't render.
 		selectedCandidates = new Set(
-			candidates.filter(c => !c.duplicate).map(c => c.id)
+			candidates.filter((c) => !c.duplicate && !c.missingInStorage).map((c) => c.id)
 		);
 		previewSearch = '';
 		previewPage = 0;
@@ -286,10 +354,7 @@
 	);
 
 	function toggleCandidate(id: string) {
-		const next = new Set(selectedCandidates);
-		if (next.has(id)) next.delete(id);
-		else next.add(id);
-		selectedCandidates = next;
+		selectedCandidates = toggleSetMember(selectedCandidates, id);
 	}
 
 	function selectAllPreviewFiltered() {
@@ -317,6 +382,22 @@
 
 	let selectedCount = $derived(selectedCandidates.size);
 	let duplicateCount = $derived(candidates.filter(c => c.duplicate && selectedCandidates.has(c.id)).length);
+	let missingCount = $derived(candidates.filter((c) => c.missingInStorage).length);
+	let missingSelectedCount = $derived(
+		candidates.filter((c) => c.missingInStorage && selectedCandidates.has(c.id)).length
+	);
+
+	function selectAllMissing() {
+		const next = new Set(selectedCandidates);
+		for (const c of candidates) if (c.missingInStorage) next.add(c.id);
+		selectedCandidates = next;
+	}
+
+	function deselectAllMissing() {
+		const next = new Set(selectedCandidates);
+		for (const c of candidates) if (c.missingInStorage) next.delete(c.id);
+		selectedCandidates = next;
+	}
 
 	// --- Import ---
 	let importError = $state<string | null>(null);
@@ -334,6 +415,7 @@
 			if (!selectedCandidates.has(c.id)) continue;
 			const candidate: Record<string, unknown> = { id: c.id, filename: c.filename };
 			if (c.metadata && Object.keys(c.metadata).length > 0) candidate.metadata = c.metadata;
+			if (c.isAnchor) candidate.isAnchor = true;
 
 			const result = StimulusItemSchema.safeParse(candidate);
 			if (result.success) {
@@ -352,7 +434,9 @@
 		const newKeys: string[] = [];
 		if (patternResult) newKeys.push(...patternResult.keys);
 		if (csvParsed) {
-			const metaCols = csvParsed.headers.filter(h => h !== 'filename' && h !== 'id');
+			const metaCols = csvParsed.headers.filter(
+				(h) => h !== 'filename' && h !== 'id' && h !== 'isAnchor'
+			);
 			newKeys.push(...metaCols);
 		}
 		const uniqueKeys = [...new Set(newKeys)];
@@ -366,6 +450,18 @@
 		return csvParsed !== null && csvParsed.rows.length > 0;
 	});
 </script>
+
+{#snippet paginationStrip(safePage: number, pageCount: number, setPage: (n: number) => void)}
+	{#if pageCount > 1}
+		<div class="flex items-center justify-center gap-2">
+			<button type="button" disabled={safePage === 0} onclick={() => setPage(safePage - 1)}
+				class="px-2 py-1 text-xs border border-gray-300 rounded hover:bg-gray-50 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed">&lt;</button>
+			<span class="text-xs text-gray-500">{safePage + 1} / {pageCount}</span>
+			<button type="button" disabled={safePage >= pageCount - 1} onclick={() => setPage(safePage + 1)}
+				class="px-2 py-1 text-xs border border-gray-300 rounded hover:bg-gray-50 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed">&gt;</button>
+		</div>
+	{/if}
+{/snippet}
 
 <Modal {show} title="Bulk Import Stimuli" wide onclose={onclose}>
 	{#if step === 'source'}
@@ -451,16 +547,7 @@
 						{/each}
 					</div>
 
-					<!-- Pagination -->
-					{#if storagePageCount > 1}
-						<div class="flex items-center justify-center gap-2">
-							<button type="button" disabled={storagePageSafe === 0} onclick={() => storagePage = storagePageSafe - 1}
-								class="px-2 py-1 text-xs border border-gray-300 rounded hover:bg-gray-50 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed">&lt;</button>
-							<span class="text-xs text-gray-500">{storagePageSafe + 1} / {storagePageCount}</span>
-							<button type="button" disabled={storagePageSafe >= storagePageCount - 1} onclick={() => storagePage = storagePageSafe + 1}
-								class="px-2 py-1 text-xs border border-gray-300 rounded hover:bg-gray-50 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed">&gt;</button>
-						</div>
-					{/if}
+					{@render paginationStrip(storagePageSafe, storagePageCount, (n) => (storagePage = n))}
 
 					<!-- Filename pattern for metadata extraction -->
 					<div class="border-t border-gray-200 pt-3 space-y-2">
@@ -544,6 +631,28 @@
 					<div class="text-xs space-y-1">
 						<p class="text-green-700 font-medium">{csvParsed.rows.length} rows parsed</p>
 						<p class="text-gray-500">Columns: {csvParsed.headers.join(', ')}</p>
+
+						{#if config.stimuli.source === 'supabase-storage' && config.stimuli.storagePath}
+							{#if csvStorageCheck.state === 'loading'}
+								<p class="text-gray-500">Checking against storage at <span class="font-mono">{config.stimuli.storagePath}</span>…</p>
+							{:else if csvStorageCheck.state === 'error'}
+								<p class="text-amber-700">
+									Could not check storage ({csvStorageCheck.error}). Import will proceed without existence verification.
+								</p>
+							{:else if csvStorageCheck.state === 'done'}
+								{@const filenameCol = csvParsed.headers.includes('filename') ? 'filename' : 'id'}
+								{@const refs = csvParsed.rows.map((r) => r[filenameCol]).filter(Boolean)}
+								{@const matched = refs.filter((f) => csvStorageCheck.files.has(f)).length}
+								{@const missing = refs.length - matched}
+								<p class={missing === 0 ? 'text-green-700' : 'text-amber-700'}>
+									Storage check: {matched} of {refs.length} file{refs.length === 1 ? '' : 's'} found
+									{#if missing > 0}— <strong>{missing} missing</strong> from <span class="font-mono">{config.stimuli.storagePath}</span>{/if}
+								</p>
+								{#if csvStorageCheck.truncated}
+									<p class="text-amber-700">Storage listing was truncated; very large folders may show false-missing warnings.</p>
+								{/if}
+							{/if}
+						{/if}
 						{#if csvParsed.rows.length > 0}
 							<div class="border border-gray-200 rounded overflow-x-auto">
 								<table class="text-xs w-full">
@@ -574,21 +683,6 @@
 			</div>
 		{/if}
 
-		<!-- Footer -->
-		<div class="flex justify-between items-center mt-6 pt-4 border-t border-gray-200">
-			<button type="button" onclick={onclose} class="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 cursor-pointer">
-				Cancel
-			</button>
-			<button
-				type="button"
-				onclick={goToPreview}
-				disabled={!canGoToPreview}
-				class="px-4 py-2 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-			>
-				Next: Preview
-			</button>
-		</div>
-
 	{:else}
 		<!-- Preview step -->
 		<div class="space-y-3">
@@ -605,12 +699,27 @@
 			</div>
 
 			<!-- Summary -->
-			<div class="flex items-center gap-2 text-sm">
+			<div class="flex items-center gap-2 text-sm flex-wrap">
 				<span class="font-medium text-gray-700">
 					{selectedCount} item{selectedCount === 1 ? '' : 's'} to import
 				</span>
 				{#if duplicateCount > 0}
 					<span class="text-amber-600">({duplicateCount} duplicate{duplicateCount === 1 ? '' : 's'})</span>
+				{/if}
+				{#if missingCount > 0}
+					<span class="text-red-600">
+						· {missingCount} reference file{missingCount === 1 ? '' : 's'} not in storage
+						{#if missingSelectedCount > 0}
+							({missingSelectedCount} still selected)
+						{/if}
+					</span>
+					<button
+						type="button"
+						onclick={missingSelectedCount > 0 ? deselectAllMissing : selectAllMissing}
+						class="text-xs text-indigo-600 hover:text-indigo-800 cursor-pointer underline"
+					>
+						{missingSelectedCount > 0 ? 'Deselect missing' : 'Select missing anyway'}
+					</button>
 				{/if}
 			</div>
 
@@ -650,7 +759,7 @@
 					</thead>
 					<tbody>
 						{#each previewPaged as candidate (candidate.id)}
-							<tr class="border-t border-gray-100 {selectedCandidates.has(candidate.id) ? 'bg-indigo-50' : ''} {candidate.duplicate ? 'bg-amber-50' : ''}">
+							<tr class="border-t border-gray-100 {selectedCandidates.has(candidate.id) ? 'bg-indigo-50' : ''} {candidate.missingInStorage ? 'bg-red-50' : candidate.duplicate ? 'bg-amber-50' : ''}">
 								<td class="px-2 py-1">
 									<input
 										type="checkbox"
@@ -658,13 +767,22 @@
 										onchange={() => toggleCandidate(candidate.id)}
 									/>
 								</td>
-								<td class="px-2 py-1 font-mono text-gray-700">{candidate.id}</td>
+								<td class="px-2 py-1 font-mono text-gray-700">
+									<span class="inline-flex items-center gap-1">
+										{candidate.id}
+										{#if candidate.isAnchor}
+											<span class="text-[10px] uppercase tracking-wide px-1 py-px bg-amber-100 text-amber-800 rounded font-medium" title="Test-retest anchor (from CSV isAnchor column)">anchor</span>
+										{/if}
+									</span>
+								</td>
 								<td class="px-2 py-1 font-mono text-gray-500 max-w-48 truncate">{candidate.filename}</td>
 								{#each candidateMetadataKeys as key}
 									<td class="px-2 py-1 text-gray-600">{candidate.metadata?.[key] ?? ''}</td>
 								{/each}
 								<td class="px-2 py-1">
-									{#if candidate.duplicate}
+									{#if candidate.missingInStorage}
+										<span class="text-xs px-1.5 py-0.5 bg-red-100 text-red-700 rounded" title="File not found in {config.stimuli.storagePath}">missing</span>
+									{:else if candidate.duplicate}
 										<span class="text-xs px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded">exists</span>
 									{:else}
 										<span class="text-xs px-1.5 py-0.5 bg-green-100 text-green-700 rounded">new</span>
@@ -676,16 +794,7 @@
 				</table>
 			</div>
 
-			<!-- Pagination -->
-			{#if previewPageCount > 1}
-				<div class="flex items-center justify-center gap-2">
-					<button type="button" disabled={previewSafePage === 0} onclick={() => previewPage = previewSafePage - 1}
-						class="px-2 py-1 text-xs border border-gray-300 rounded hover:bg-gray-50 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed">&lt;</button>
-					<span class="text-xs text-gray-500">{previewSafePage + 1} / {previewPageCount}</span>
-					<button type="button" disabled={previewSafePage >= previewPageCount - 1} onclick={() => previewPage = previewSafePage + 1}
-						class="px-2 py-1 text-xs border border-gray-300 rounded hover:bg-gray-50 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed">&gt;</button>
-				</div>
-			{/if}
+			{@render paginationStrip(previewSafePage, previewPageCount, (n) => (previewPage = n))}
 
 			{#if importError}
 				<div class="mt-2 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
@@ -693,8 +802,26 @@
 				</div>
 			{/if}
 
-			<!-- Footer -->
-			<div class="flex justify-between items-center pt-4 border-t border-gray-200">
+		</div>
+	{/if}
+
+	{#snippet footer()}
+		{#if step === 'source'}
+			<div class="flex justify-between items-center">
+				<button type="button" onclick={onclose} class="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 cursor-pointer">
+					Cancel
+				</button>
+				<button
+					type="button"
+					onclick={goToPreview}
+					disabled={!canGoToPreview}
+					class="px-4 py-2 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+				>
+					Next: Preview
+				</button>
+			</div>
+		{:else}
+			<div class="flex justify-between items-center">
 				<button type="button" onclick={() => { step = 'source'; }} class="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 cursor-pointer">
 					&larr; Back
 				</button>
@@ -707,6 +834,6 @@
 					Import {selectedCount} item{selectedCount === 1 ? '' : 's'}
 				</button>
 			</div>
-		</div>
-	{/if}
+		{/if}
+	{/snippet}
 </Modal>
