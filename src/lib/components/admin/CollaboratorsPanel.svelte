@@ -24,6 +24,12 @@
 	let inviteRole = $state<CollaboratorRole>('editor');
 	let inviting = $state(false);
 	let copiedClaimUrl = $state<string | null>(null);
+	// Per-row "Resend in progress" state — populated with the inviteId of
+	// whichever Resend button was just clicked, cleared when the action's
+	// enhance callback resolves. Lets the button text + disabled state
+	// reflect the in-flight request without confusingly disabling EVERY
+	// Resend button on the page.
+	let resendingInviteId = $state<string | null>(null);
 
 	const isOwner = $derived(myRole === 'owner');
 	const roleOptions: CollaboratorRole[] = ['owner', 'editor', 'viewer'];
@@ -144,14 +150,17 @@
 								<form
 									method="POST"
 									action="?/resendInvite"
-									use:enhance={preserveFields}
+									use:enhance={withLoadingFlag(
+										(loading) => (resendingInviteId = loading ? inv.id : null)
+									)}
 									class="inline mr-3"
 								>
 									<input type="hidden" name="inviteId" value={inv.id} />
 									<button
 										type="submit"
-										class="text-xs text-indigo-600 hover:underline cursor-pointer"
-									>Resend</button>
+										disabled={resendingInviteId === inv.id}
+										class="text-xs text-indigo-600 hover:underline cursor-pointer disabled:opacity-50 disabled:cursor-wait"
+									>{resendingInviteId === inv.id ? 'Resending…' : 'Resend'}</button>
 								</form>
 								<form
 									method="POST"

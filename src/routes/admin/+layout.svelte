@@ -5,7 +5,15 @@
 	let { data, children } = $props();
 	let adminUser = $derived(data.adminUser);
 
-	let isLoginPage = $derived($page.url.pathname === '/admin/login');
+	// Bare layout (no TopBar, no flex shell) for the public auth pages —
+	// they render their own centered single-column layout. Keeping these
+	// pages out of the admin shell also avoids leaking adminUser/breadcrumb
+	// state to logged-out visitors.
+	let isBarePage = $derived(
+		$page.url.pathname === '/admin/login' ||
+			$page.url.pathname === '/admin/forgot-password' ||
+			$page.url.pathname === '/admin/reset-password'
+	);
 
 	// Build breadcrumb from URL
 	let breadcrumb = $derived.by(() => {
@@ -32,7 +40,7 @@
 	<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
 </svelte:head>
 
-{#if isLoginPage}
+{#if isBarePage}
 	{@render children()}
 {:else}
 	<div class="min-h-screen flex flex-col bg-gray-50">

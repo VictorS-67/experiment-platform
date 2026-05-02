@@ -43,7 +43,12 @@
 					{#each data.experiments as exp}
 						<tr class="hover:bg-gray-50">
 							<td class="px-4 py-3 font-medium text-gray-800">
-								{localizedTitle(exp.title)}
+								<a
+									href="/admin/experiments/{exp.id}"
+									class="text-gray-800 hover:text-indigo-700 hover:underline"
+								>
+									{localizedTitle(exp.title)}
+								</a>
 							</td>
 							<td class="px-4 py-3 text-gray-500">
 								<code class="bg-gray-100 px-1.5 py-0.5 rounded text-xs">{exp.slug}</code>
