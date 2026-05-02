@@ -1,4 +1,5 @@
 import { error } from '@sveltejs/kit';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { getServerSupabase } from './supabase';
 import { unwrap, unwrapVoid } from './db';
 
@@ -295,37 +296,88 @@ export async function inviteCollaboratorByEmail(
 
 	const claimUrl = `${origin}/admin/login?claim=${encodeURIComponent(claimToken)}`;
 
-	// Best-effort email send via Supabase Auth. If SMTP isn't configured this
-	// will fail or be rate-limited — that's fine, the admin can still copy the
-	// claim URL.
-	let emailSent: boolean | undefined;
-	let emailError: string | undefined;
+	// Best-effort email send via Supabase Auth. Branch on whether the auth
+	// user already exists (e.g. previous unclaimed invite, manual signup):
+	// `inviteUserByEmail` is "create + email" and rejects existing users
+	// with "already registered", so for those we use `resetPasswordForEmail`
+	// which works on existing rows. Both end at /admin/reset-password with
+	// the claim token — see sendInviteOrRecoveryEmail.
+	const { emailSent, emailError } = await sendInviteOrRecoveryEmail({
+		supabase,
+		email,
+		claimToken,
+		origin,
+		isExistingUser: !!existingUser
+	});
+
+	// Note: we deliberately do NOT surface a server-generated recovery URL
+	// to the inviting admin on email failure. Doing so would let any owner
+	// take over the auth identity of any non-admin email by inviting it —
+	// see SECURITY.md "Invite-flow privilege boundary" for the full attack
+	// chain. The invitee uses the platform's Forgot Password page to set a
+	// password once email recovers; if SMTP is hard-broken, see SECURITY.md
+	// "Recovering when email is unavailable" for the manual Dashboard path.
+
+	return { kind: 'invited', claimUrl, emailSent, emailError };
+}
+
+/**
+ * Send the email that lets a user set or reset a password and land on the
+ * platform with the claim context preserved. Branches on whether an
+ * `auth.users` row already exists for this email:
+ *
+ *   - **No existing row** → `inviteUserByEmail`. Creates the auth row and
+ *     sends an invite email. Supabase puts `type=invite` in the redirect
+ *     fragment; `/admin/login` short-circuits to `/admin/reset-password`
+ *     preserving `?claim=`.
+ *   - **Existing row** → `resetPasswordForEmail`. Doesn't try to recreate
+ *     (which would fail with "already registered"). Supabase puts
+ *     `type=recovery` in the fragment; the redirectTo lands directly on
+ *     `/admin/reset-password?claim=...` and the existing recovery handler
+ *     consumes it.
+ *
+ * Both branches end at `/admin/reset-password` with the claim token, then
+ * the user sets a password and is bounced to
+ * `/admin/login?claim=…&reset=success` to sign in — `claimInvitesForUser`
+ * runs on that sign-in and ties them to the experiment.
+ *
+ * Privilege boundary: NEITHER branch surfaces a server-generated URL to
+ * the calling admin. The only way to use either link is to receive the
+ * Supabase email and click it. This is safe by the same model as standard
+ * password-recovery (mailbox ownership = identity proof).
+ */
+async function sendInviteOrRecoveryEmail(args: {
+	supabase: SupabaseClient;
+	email: string;
+	claimToken: string;
+	origin: string;
+	isExistingUser: boolean;
+}): Promise<{ emailSent: boolean; emailError?: string }> {
+	const { supabase, email, claimToken, origin, isExistingUser } = args;
 	try {
+		if (isExistingUser) {
+			const recoveryRedirect = `${origin}/admin/reset-password?claim=${encodeURIComponent(claimToken)}`;
+			const { error: resetErr } = await supabase.auth.resetPasswordForEmail(email, {
+				redirectTo: recoveryRedirect
+			});
+			if (resetErr) {
+				console.warn('Recovery email send failed:', resetErr.message);
+				return { emailSent: false, emailError: resetErr.message };
+			}
+			return { emailSent: true };
+		}
+		const claimUrl = `${origin}/admin/login?claim=${encodeURIComponent(claimToken)}`;
 		const { error: inviteErr } = await supabase.auth.admin.inviteUserByEmail(email, {
 			redirectTo: claimUrl
 		});
 		if (inviteErr) {
-			emailSent = false;
-			emailError = inviteErr.message;
-			console.warn('Auth invite email failed (admin can still share claim URL):', inviteErr.message);
-		} else {
-			emailSent = true;
+			console.warn('Invite email send failed:', inviteErr.message);
+			return { emailSent: false, emailError: inviteErr.message };
 		}
+		return { emailSent: true };
 	} catch (err) {
-		emailSent = false;
-		emailError = err instanceof Error ? err.message : 'Unknown error';
+		return { emailSent: false, emailError: err instanceof Error ? err.message : 'Unknown error' };
 	}
-
-	// Note: we deliberately do NOT generate a Supabase password-recovery URL
-	// to surface to the inviting admin on SMTP failure. Doing so would let
-	// any owner take over the auth identity of any non-admin email by
-	// inviting it — see SECURITY.md "Invite-flow privilege boundary" for
-	// the full attack chain. The invitee uses the platform's Forgot Password
-	// page to set a password once email recovers; if SMTP is hard-broken,
-	// see SECURITY.md "Recovering when email is unavailable" for the manual
-	// Supabase Dashboard procedure.
-
-	return { kind: 'invited', claimUrl, emailSent, emailError };
 }
 
 /** Re-emit the Supabase Auth invite email for an existing pending invite,
@@ -364,25 +416,23 @@ export async function resendPendingInvite(
 		'Failed to refresh invite expiry'
 	);
 
-	let emailSent = false;
-	let emailError: string | undefined;
-	try {
-		const { error: inviteErr } = await supabase.auth.admin.inviteUserByEmail(email, {
-			redirectTo: claimUrl
-		});
-		if (inviteErr) {
-			emailError = inviteErr.message;
-			console.warn('Resend email failed:', inviteErr.message);
-		} else {
-			emailSent = true;
-		}
-	} catch (err) {
-		emailError = err instanceof Error ? err.message : 'Unknown error';
-	}
+	// On resend the auth user almost certainly exists (was created at the
+	// original invite). Look it up explicitly so the helper picks the right
+	// branch — `inviteUserByEmail` would fail with "already registered" on
+	// resend without this. The lookup is one HTTP round-trip, acceptable
+	// for an admin button-click.
+	const { data: usersList } = await supabase.auth.admin.listUsers({ perPage: 1000 });
+	const existingUser = usersList.users.find((u) => (u.email ?? '').toLowerCase() === email);
 
-	// As in inviteCollaboratorByEmail: no recovery-URL fallback. Forgot
-	// Password is the legitimate recovery path for the invitee; manual
-	// Dashboard intervention covers the SMTP-hard-broken case.
+	const { emailSent, emailError } = await sendInviteOrRecoveryEmail({
+		supabase,
+		email,
+		claimToken,
+		origin,
+		isExistingUser: !!existingUser
+	});
+
+	// As in inviteCollaboratorByEmail: no admin-visible recovery-URL fallback.
 	return { emailSent, emailError, email, claimUrl };
 }
 
