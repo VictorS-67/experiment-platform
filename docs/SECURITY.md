@@ -76,6 +76,48 @@ frame-ancestors 'none'
 - Non-collaborators get **404** (not 403) — hide existence rather than leak it.
 - Owners can invite by email through `pending_invites`; claim happens at next login via `claimInvitesForUser`.
 - Owner-invariant trigger blocks demoting/removing the last owner of an experiment (migrations 015 + 021).
+- Revoking a pending invite also deletes the orphaned `auth.users` row when safe (no other pending invites for the email AND no `admin_users` row), so a re-invite for the same email starts cleanly.
+
+## Pre-deploy Supabase Auth configuration
+
+For every Supabase project the platform deploys against (local, staging, prod), verify **Auth → URL Configuration** in the Supabase dashboard before launching:
+
+1. **Site URL** = production hostname (no trailing slash). The default `http://localhost:3000` ends up in invite emails as the body text "You have been invited to create a user on …" — embarrassing on prod and confusing for invitees.
+2. **Redirect URLs** allowlist must include `${SITE_URL}/admin/**` (production), plus `http://localhost:5173/admin/**` for local dev. Without the allowlist entry, `supabase.auth.admin.inviteUserByEmail({ redirectTo })` silently falls back to Site URL and the invite-claim flow appears broken to the invitee. The same applies to `supabase.auth.resetPasswordForEmail({ redirectTo })`.
+3. (Optional, for prod) Custom SMTP. Free-tier built-in mailer is rate-limited to ~3-4 emails/hour and may land in spam — fine for ≤5 collaborators per experiment, painful beyond that.
+
+## Invite-flow privilege boundary
+
+The collaborator-invite flow deliberately does NOT surface a server-generated Supabase password-recovery URL to the inviting admin when SMTP fails. This is a security trade-off, not an oversight.
+
+Earlier iterations did surface a `recoveryUrl` (returned by `supabase.auth.admin.generateLink({ type: 'recovery', email })`) so the admin could share both a "set password" and an "accept invite" link out-of-band when the built-in mailer was rate-limited. That gave any owner of any experiment a privilege-escalation primitive:
+
+1. Owner-attacker invites `victim@example.com` to their own experiment.
+2. Owner-attacker spams a few invites to burn the free-tier email rate limit (3-4/hour).
+3. Subsequent invites return `recoveryUrl` (no email needed).
+4. Owner-attacker uses the recovery URL to set a new password on victim's `auth.users` row — created by `inviteUserByEmail` even when email-send fails.
+5. Owner-attacker logs in as victim. Their `claimInvitesForUser` runs and grants victim an `admin_users` row.
+6. Any later invite of victim's email by another owner falls into the "added directly" branch (existing-admin shortcut) — granting owner-attacker access to that other experiment via victim's identity.
+
+The hole affected any email NOT yet in `admin_users` (existing admins were protected by the `if (existingUser && adminRow) return { kind: 'added' }` short-circuit). To close it, the recovery-URL fallback was removed entirely. The legitimate recovery paths are:
+
+- **Invitee-driven**: when SMTP recovers (e.g. rate limit clears in an hour), invitee opens the claim URL → sees the "you've been invited" banner → clicks **Forgot password?** → enters their email → receives a reset link → sets password → returns to login → invite claims automatically.
+- **Admin-driven (no SMTP at all)**: see "Recovering when email is unavailable" below.
+
+When making changes to `inviteCollaboratorByEmail` or `resendPendingInvite`, do not re-introduce a server-generated recovery/magic link surfaced to the inviting admin. Any new invite-flow URL exposed to admins must be either (a) bound to the platform's own `claim_token` (no auth power) or (b) routed through email so only the recipient can use it.
+
+## Recovering when email is unavailable
+
+Both invite delivery (`inviteUserByEmail`) and password reset (`resetPasswordForEmail`) go through the same Supabase Auth mailer. If that mailer is hard-broken — custom SMTP misconfigured, project-wide block, free-tier rate limit you can't wait through — the platform has no in-app way to give an invitee or stuck collaborator a working credential.
+
+Manual fallback (admin with Supabase project access required):
+
+1. Open the Supabase Dashboard → **Authentication → Users**.
+2. Find the affected email's row.
+3. Click ⋯ → **Send invite** (for an unclaimed pending invite) or **Send password recovery** (for a collaborator who already has an account).
+4. The Dashboard's email-send path is the same one the platform uses, so this only helps if the underlying issue was platform-side and not Supabase-side. If even the Dashboard can't send, the project's auth email is genuinely down — fix custom SMTP / wait for rate-limit reset / contact Supabase support.
+
+This step is intentionally NOT exposed in the platform's UI: the same admin-Dashboard endpoint that triggers a manual recovery email is the same primitive that powers the security hole described above. Keeping it Dashboard-only means only project-level admins (a smaller, more trusted set than per-experiment owners) can issue out-of-band credential reset links.
 
 ## Optimistic Locking
 

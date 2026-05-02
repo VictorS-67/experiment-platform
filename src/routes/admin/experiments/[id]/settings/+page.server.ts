@@ -6,6 +6,7 @@ import {
 	listCollaborators,
 	listPendingInvites,
 	inviteCollaboratorByEmail,
+	resendPendingInvite,
 	setCollaboratorRole,
 	removeCollaborator,
 	revokePendingInvite,
@@ -95,9 +96,14 @@ export const actions: Actions = {
 			if (outcome.kind === 'added') {
 				return { success: true, invited: true, message: `${email} added as ${role}.` };
 			}
+			// SMTP-failed UX: invitee uses Forgot Password from /admin/login
+			// (linked from the page) once email starts flowing again. The
+			// recovery-URL fallback used to live here but was removed for
+			// security reasons — see SECURITY.md "Invite-flow privilege
+			// boundary".
 			const baseMessage = outcome.emailSent
 				? `Invite emailed to ${email}.`
-				: `Email could not be sent (${outcome.emailError ?? 'no SMTP configured'}). Share this link with them:`;
+				: `Email could not be sent (${outcome.emailError ?? 'no SMTP configured'}). Share the link below — once email is working again, your invitee can use the "Forgot password" link on the sign-in page to set a password and accept.`;
 			return {
 				success: true,
 				invited: true,
@@ -108,6 +114,32 @@ export const actions: Actions = {
 			return fail(400, {
 				error: err instanceof Error ? err.message : 'Failed to invite.',
 				form: 'invite'
+			});
+		}
+	},
+
+	resendInvite: async ({ request, params, locals, url, getClientAddress }) => {
+		await requireExperimentAccess(locals.adminUser, params.id, 'owner');
+		const formData = await request.formData();
+		const inviteId = formData.get('inviteId') as string;
+		if (!inviteId) return fail(400, { error: 'Missing invite.', form: 'resend' });
+
+		try {
+			const outcome = await resendPendingInvite(params.id, inviteId, url.origin);
+			await audit(params, locals, getClientAddress, 'invite.resend', { inviteId, email: outcome.email });
+			const message = outcome.emailSent
+				? `Invite re-emailed to ${outcome.email}.`
+				: `Email could not be sent (${outcome.emailError ?? 'no SMTP configured'}). Share the link below — once email is working again, your invitee can use the "Forgot password" link on the sign-in page to set a password and accept.`;
+			return {
+				success: true,
+				invited: true,
+				message,
+				claimUrl: outcome.claimUrl
+			};
+		} catch (err) {
+			return fail(400, {
+				error: err instanceof Error ? err.message : 'Failed to resend.',
+				form: 'resend'
 			});
 		}
 	},

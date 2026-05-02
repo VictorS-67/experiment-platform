@@ -9,7 +9,13 @@
 		pendingInvites: PendingInvite[];
 		myRole: CollaboratorRole;
 		myUserId: string;
-		formMessage?: { success?: boolean; message?: string; claimUrl?: string; error?: string; form?: string } | null;
+		formMessage?: {
+			success?: boolean;
+			message?: string;
+			claimUrl?: string;
+			error?: string;
+			form?: string;
+		} | null;
 	}
 
 	let { collaborators, pendingInvites, myRole, myUserId, formMessage }: Props = $props();
@@ -45,6 +51,7 @@
 			<tr class="text-left text-gray-500 border-b border-gray-200">
 				<th class="py-2 font-medium">Email</th>
 				<th class="py-2 font-medium">Role</th>
+				<th class="py-2 font-medium">Invited by</th>
 				<th class="py-2 font-medium text-right">Actions</th>
 			</tr>
 		</thead>
@@ -79,6 +86,7 @@
 							<span class="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-700">{c.role}</span>
 						{/if}
 					</td>
+					<td class="py-2 text-gray-500 text-xs">{c.addedByEmail ?? '—'}</td>
 					<td class="py-2 text-right">
 						{#if isOwner && c.userId !== myUserId}
 							<form
@@ -107,6 +115,7 @@
 				<tr class="text-left text-gray-500 border-b border-gray-200">
 					<th class="py-2 font-medium">Email</th>
 					<th class="py-2 font-medium">Role</th>
+					<th class="py-2 font-medium">Invited by</th>
 					<th class="py-2 font-medium">Expires</th>
 					<th class="py-2 font-medium text-right">Actions</th>
 				</tr>
@@ -116,7 +125,15 @@
 					<tr class="border-b border-gray-100">
 						<td class="py-2 text-gray-800">{inv.email}</td>
 						<td class="py-2"><span class="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-700">{inv.role}</span></td>
-						<td class="py-2 text-gray-500 text-xs">{formatDate(inv.expiresAt)}</td>
+						<td class="py-2 text-gray-500 text-xs">{inv.invitedByEmail ?? '—'}</td>
+						<td class="py-2 text-gray-500 text-xs">
+							{formatDate(inv.expiresAt)}
+							<!-- Email-link OTP TTL is much shorter than the platform's
+							     14-day claim-token TTL — make that explicit so admins
+							     don't assume "13 days left" means the email link still
+							     works. -->
+							<div class="text-[10px] text-gray-400">Email link expires ~1h after each send</div>
+						</td>
 						<td class="py-2 text-right">
 							{#if isOwner}
 								<button
@@ -124,6 +141,18 @@
 									onclick={() => copyToClipboard(`${window.location.origin}/admin/login?claim=${inv.claimToken}`)}
 									class="text-xs text-indigo-600 hover:underline cursor-pointer mr-3"
 								>{copiedClaimUrl?.endsWith(inv.claimToken) ? 'Copied!' : 'Copy link'}</button>
+								<form
+									method="POST"
+									action="?/resendInvite"
+									use:enhance={preserveFields}
+									class="inline mr-3"
+								>
+									<input type="hidden" name="inviteId" value={inv.id} />
+									<button
+										type="submit"
+										class="text-xs text-indigo-600 hover:underline cursor-pointer"
+									>Resend</button>
+								</form>
 								<form
 									method="POST"
 									action="?/revokeInvite"
@@ -134,6 +163,10 @@
 									<button
 										type="submit"
 										class="text-xs text-red-600 hover:underline cursor-pointer"
+										onclick={(e) => {
+											const msg = `Revoke invite for ${inv.email}?\n\nIf they have never logged in, this will also delete their pending Supabase Auth account. They'd need a fresh invite to access any experiment.`;
+											if (!confirm(msg)) e.preventDefault();
+										}}
 									>Revoke</button>
 								</form>
 							{/if}

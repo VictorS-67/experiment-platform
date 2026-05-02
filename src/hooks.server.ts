@@ -111,9 +111,16 @@ export const handle: Handle = async ({ event, resolve }) => {
 
 	// Admin auth middleware
 	const isAdminRoute = pathname === '/admin' || pathname.startsWith('/admin/');
-	const isLoginPage = pathname === '/admin/login';
+	// Public admin routes — auth pages that must be reachable without an
+	// admin session: the login form, the forgot-password request form, and
+	// the reset-password landing page (which validates a recovery token from
+	// the URL fragment client-side).
+	const isPublicAdminPage =
+		pathname === '/admin/login' ||
+		pathname === '/admin/forgot-password' ||
+		pathname === '/admin/reset-password';
 
-	if (isAdminRoute && !isLoginPage) {
+	if (isAdminRoute && !isPublicAdminPage) {
 		const accessToken = event.cookies.get('admin_access_token');
 		const refreshToken = event.cookies.get('admin_refresh_token');
 
