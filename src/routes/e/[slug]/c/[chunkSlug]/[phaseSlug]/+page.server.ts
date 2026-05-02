@@ -142,11 +142,21 @@ export const load: PageServerLoad = async ({ locals, parent, params }) => {
 			? { completed: completedCount, total: totalCount }
 			: null;
 
+	// Scope URL signing to ONLY the stimuli this page will render. Without
+	// this filter, every chunked-phase load would sign all 600+ stimuli in
+	// the experiment via Supabase's createSignedUrls — a multi-second hit
+	// on free tier. Anchors that recur across chunks are already in
+	// `orderedStimulusIds` for each chunk, so they're covered.
+	const idsToSign = new Set(orderedStimulusIds);
+
 	if (phase.type === 'review' && phase.reviewConfig) {
 		const sourceResponses = await loadResponses(experimentId, participant.id, phase.reviewConfig.sourcePhase);
 		const responses = await loadResponses(experimentId, participant.id, phase.id);
+		// Defensive: a future cross-chunk review config could surface source
+		// responses whose stimulus_id isn't in the current chunk. Add those too.
+		for (const r of sourceResponses) idsToSign.add(r.stimulus_id);
 		const [stimuliUrls, audioUrls] = await Promise.all([
-			signStimuliUrls(experiment.config.stimuli),
+			signStimuliUrls(experiment.config.stimuli, 7200, idsToSign),
 			signAudioUrls(extractAudioPaths([...sourceResponses, ...responses]))
 		]);
 		return { participant: participantData, responses, sourceResponses, phase, orderedStimulusIds, chunkSlug, blockBoundaries, breakScreen, orderedChunkSlugs, resumeContext, signedUrls: { ...stimuliUrls, ...audioUrls } };
@@ -154,7 +164,7 @@ export const load: PageServerLoad = async ({ locals, parent, params }) => {
 
 	const responses = await loadResponses(experimentId, participant.id, phase.id);
 	const [stimuliUrls, audioUrls] = await Promise.all([
-		signStimuliUrls(experiment.config.stimuli),
+		signStimuliUrls(experiment.config.stimuli, 7200, idsToSign),
 		signAudioUrls(extractAudioPaths(responses))
 	]);
 	return { participant: participantData, responses, phase, orderedStimulusIds, chunkSlug, blockBoundaries, breakScreen, orderedChunkSlugs, resumeContext, signedUrls: { ...stimuliUrls, ...audioUrls } };

@@ -2,6 +2,7 @@
 	import '../app.css';
 	import { i18n } from '$lib/i18n/index.svelte';
 	import { onMount } from 'svelte';
+	import NavigationProgress from '$lib/components/layout/NavigationProgress.svelte';
 
 	let { children } = $props();
 
@@ -12,5 +13,7 @@
 		i18n.setLanguage(i18n.language);
 	});
 </script>
+
+<NavigationProgress />
 
 {@render children()}
