@@ -4,20 +4,29 @@
 	import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 	import { PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY } from '$env/static/public';
 
-	// Recovery flow lands here after the user clicks the password-reset email
-	// link. Supabase's hosted magic-link handler sets the session and bounces
-	// to redirectTo with `#access_token=...&refresh_token=...&type=recovery`.
-	// The hash never reaches the server, so this whole page is client-side:
-	// parse the hash, hand the tokens to a per-page Supabase client, then
-	// updateUser({ password }). On success we redirect to /admin/login with
-	// a success flag — the user signs in normally with the new password.
+	// Two flows land here, both via the same fragment-tokens contract:
+	//   1. Password recovery (`type=recovery`) — user clicked Forgot Password.
+	//   2. Invite acceptance (`type=invite`) — Supabase's hosted invite
+	//      handler bounces here from /admin/login when type=invite is in
+	//      the fragment (the login page short-circuits and forwards us
+	//      with the original ?claim= preserved as a query param).
+	// Either way: parse fragment → setSession on a throwaway client →
+	// updateUser({ password }) → signOut → bounce to /admin/login. When a
+	// ?claim= is present, the bounce includes it so claimInvitesForUser
+	// runs on the next sign-in.
 	//
 	// Note: this client is throwaway. We don't want to mutate any global
-	// admin session because the user may not yet have one (recovery flow
-	// for an invitee who never set a password before).
+	// admin session because the user may not yet have one (invite-acceptance
+	// flow for someone who hasn't logged in before).
 	let supabase = $state<SupabaseClient | null>(null);
 	let phase = $state<'loading' | 'ready' | 'submitting' | 'success' | 'error'>('loading');
 	let errorMessage = $state<string | null>(null);
+	// `flowType` drives the heading + button copy. Set by onMount once the
+	// fragment is parsed.
+	let flowType = $state<'invite' | 'recovery'>('recovery');
+	// Preserve the claim token across the bounce-back to /admin/login so the
+	// next sign-in claims the invite. Captured in onMount.
+	let claimToken = $state<string | null>(null);
 
 	let password = $state('');
 	let passwordConfirm = $state('');
@@ -32,17 +41,22 @@
 		const refreshToken = params.get('refresh_token');
 		const type = params.get('type');
 
+		// Capture the claim token from the search params (set by the
+		// /admin/login → /admin/reset-password forward in the invite flow).
+		claimToken = new URLSearchParams(window.location.search).get('claim');
+
 		if (!accessToken || !refreshToken) {
 			phase = 'error';
 			errorMessage =
-				'This page requires a recovery link from your email. If you arrived here directly, request a new password-reset link from the forgot-password page.';
+				'This page requires a link from your email. If you arrived here directly, request a new link from the forgot-password page.';
 			return;
 		}
-		if (type && type !== 'recovery') {
+		if (type && type !== 'recovery' && type !== 'invite') {
 			phase = 'error';
-			errorMessage = 'Unexpected link type. Please request a new password-reset link.';
+			errorMessage = 'Unexpected link type. Please request a new link.';
 			return;
 		}
+		flowType = type === 'invite' ? 'invite' : 'recovery';
 
 		// `persistSession: false` is critical: this is a recovery session,
 		// short-lived, and we sign out at the end. Default localStorage
@@ -96,15 +110,21 @@
 
 		// Done — sign out the recovery session so the user lands on /admin/login
 		// fresh (and forces them to log in with the new password, which is
-		// also what tells our server to mint admin cookies).
+		// also what tells our server to mint admin cookies). When we got
+		// here from an invite forward, preserve the claim token so the
+		// next sign-in's claimInvitesForUser can match it (and the login
+		// page can show the right banner).
 		await supabase.auth.signOut();
 		phase = 'success';
-		setTimeout(() => goto('/admin/login?reset=success'), 800);
+		const dest = claimToken
+			? `/admin/login?claim=${encodeURIComponent(claimToken)}&reset=success`
+			: '/admin/login?reset=success';
+		setTimeout(() => goto(dest), 800);
 	}
 </script>
 
 <svelte:head>
-	<title>Set New Password — Admin</title>
+	<title>{flowType === 'invite' ? 'Welcome — Set Your Password' : 'Set New Password'} — Admin</title>
 	<link
 		href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap"
 		rel="stylesheet"
@@ -113,11 +133,20 @@
 
 <main class="min-h-screen flex items-center justify-center bg-gray-50 px-4">
 	<div class="w-full max-w-sm">
-		<h1 class="text-2xl font-semibold text-center mb-8 text-gray-800">Set New Password</h1>
+		<h1 class="text-2xl font-semibold text-center mb-2 text-gray-800">
+			{flowType === 'invite' ? 'Welcome — set your password' : 'Set new password'}
+		</h1>
+		{#if flowType === 'invite'}
+			<p class="text-sm text-gray-600 text-center mb-6">
+				Choose a password for your new admin account. You'll use it to sign in.
+			</p>
+		{:else}
+			<div class="mb-6"></div>
+		{/if}
 
 		{#if phase === 'loading'}
 			<div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 text-sm text-gray-600">
-				Validating recovery link...
+				Validating link...
 			</div>
 		{:else if phase === 'error'}
 			<div class="mb-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
@@ -128,7 +157,7 @@
 			</p>
 		{:else if phase === 'success'}
 			<div class="bg-green-50 border border-green-200 rounded p-6 text-sm text-green-800">
-				Password updated. Redirecting to sign in...
+				{flowType === 'invite' ? 'Password set. Redirecting to sign in...' : 'Password updated. Redirecting to sign in...'}
 			</div>
 		{:else}
 			{#if passwordError}
@@ -141,7 +170,9 @@
 				class="bg-white rounded-lg shadow-sm border border-gray-200 p-6"
 			>
 				<div class="mb-4">
-					<label for="password" class="block text-sm font-medium text-gray-700 mb-1">New password</label>
+					<label for="password" class="block text-sm font-medium text-gray-700 mb-1">
+						{flowType === 'invite' ? 'Password' : 'New password'}
+					</label>
 					<input
 						type="password"
 						id="password"
@@ -169,7 +200,11 @@
 					disabled={phase === 'submitting'}
 					class="w-full bg-indigo-600 text-white py-2 px-4 rounded font-medium hover:bg-indigo-700 transition-colors cursor-pointer disabled:opacity-50"
 				>
-					{phase === 'submitting' ? 'Updating...' : 'Update password'}
+					{#if phase === 'submitting'}
+						{flowType === 'invite' ? 'Setting...' : 'Updating...'}
+					{:else}
+						{flowType === 'invite' ? 'Set password & continue' : 'Update password'}
+					{/if}
 				</button>
 			</form>
 		{/if}

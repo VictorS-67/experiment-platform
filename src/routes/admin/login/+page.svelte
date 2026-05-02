@@ -32,29 +32,54 @@
 	}
 
 	onMount(() => {
-		// 1. Auth-error fragment
 		const hash = window.location.hash.startsWith('#')
 			? window.location.hash.slice(1)
 			: window.location.hash;
-		if (hash) {
-			const params = new URLSearchParams(hash);
-			const errCode = params.get('error_code') ?? params.get('error');
-			const errDescRaw = params.get('error_description');
+		const hashParams = hash ? new URLSearchParams(hash) : null;
+
+		// 1. Invite acceptance: Supabase's hosted invite handler bounces the
+		//    user here with `#access_token=...&type=invite`. They have a
+		//    valid OTP session but no password yet. Forward them straight to
+		//    the password-set page (which knows how to consume fragment
+		//    tokens) — preserving the `?claim=` so the post-set flow can
+		//    bring them back to claim the invite.
+		if (hashParams?.get('type') === 'invite' && hashParams.get('access_token')) {
+			const claim = new URLSearchParams(window.location.search).get('claim');
+			const target = `/admin/reset-password${claim ? `?claim=${encodeURIComponent(claim)}` : ''}#${hash}`;
+			window.location.replace(target);
+			return;
+		}
+
+		// 2. Auth-error fragment
+		if (hashParams) {
+			const errCode = hashParams.get('error_code') ?? hashParams.get('error');
+			const errDescRaw = hashParams.get('error_description');
 			const errDesc = errDescRaw ? errDescRaw.replace(/\+/g, ' ') : null;
 			if (errCode || errDesc) {
 				errorBanner = humanizeAuthError(errCode, errDesc);
 				history.replaceState(null, '', window.location.pathname + window.location.search);
 			}
 		}
+
 		const search = new URLSearchParams(window.location.search);
-		// 2. ?claim=
-		if (search.has('claim')) {
-			infoBanner =
-				"You've been invited as a collaborator. Sign in to accept (or use the link in your invitation email to set a password first).";
+		const hasClaim = search.has('claim');
+		const justReset = search.get('reset') === 'success';
+
+		// 3. ?reset=success — copy adapts depending on whether we're also
+		//    in an invite-claim flow. When both are present, the user just
+		//    completed the "set your password" step of the invite flow and
+		//    should now sign in to claim the invite.
+		if (justReset) {
+			successBanner = hasClaim
+				? 'Password set. Sign in below to accept the invite.'
+				: 'Password updated. Sign in below with your new password.';
 		}
-		// 3. ?reset=success
-		if (search.get('reset') === 'success') {
-			successBanner = 'Password updated. Sign in below with your new password.';
+
+		// 4. ?claim= — show the "you've been invited" context, unless
+		//    reset-success already references the invite.
+		if (hasClaim && !justReset) {
+			infoBanner =
+				"You've been invited as a collaborator. Sign in to accept. If you don't have a password yet, use \"Forgot password\" below to set one.";
 		}
 	});
 </script>

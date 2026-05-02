@@ -101,8 +101,9 @@ Earlier iterations did surface a `recoveryUrl` (returned by `supabase.auth.admin
 
 The hole affected any email NOT yet in `admin_users` (existing admins were protected by the `if (existingUser && adminRow) return { kind: 'added' }` short-circuit). To close it, the recovery-URL fallback was removed entirely. The legitimate recovery paths are:
 
-- **Invitee-driven**: when SMTP recovers (e.g. rate limit clears in an hour), invitee opens the claim URL → sees the "you've been invited" banner → clicks **Forgot password?** → enters their email → receives a reset link → sets password → returns to login → invite claims automatically.
-- **Admin-driven (no SMTP at all)**: see "Recovering when email is unavailable" below.
+- **Email-link path (default)**: invitee clicks the "Accept the invite" button in their invitation email → Supabase's hosted invite handler signs them in via OTP and bounces to `/admin/login?claim=...#access_token=...&type=invite` → the login page detects `type=invite` and forwards them to `/admin/reset-password` (which already knows how to consume fragment tokens) → they set a password → bounce back to `/admin/login?claim=...&reset=success` → they sign in with the new password → `claimInvitesForUser` matches by email and the invite claims.
+- **Manual claim-URL path (rare)**: invitee was given just the claim URL (no email) — they land on `/admin/login?claim=...` with no fragment, see the "you've been invited" banner that points them at **Forgot password?**, request a reset email, set a password through the same `/admin/reset-password` page, then sign in.
+- **Admin-driven (no email at all)**: see "Recovering when email is unavailable" below.
 
 When making changes to `inviteCollaboratorByEmail` or `resendPendingInvite`, do not re-introduce a server-generated recovery/magic link surfaced to the inviting admin. Any new invite-flow URL exposed to admins must be either (a) bound to the platform's own `claim_token` (no auth power) or (b) routed through email so only the recipient can use it.
 
