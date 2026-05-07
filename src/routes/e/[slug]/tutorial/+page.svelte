@@ -53,6 +53,20 @@
 	let showGatekeeper = $state(false);
 	let showWidgets = $state(false);
 
+	// Same marker derivation as the phase page so the tutorial's sample
+	// stimulus shows captured start/end positions on the scrubber too.
+	let scrubberMarkers = $derived.by(() => {
+		const out: Array<{ at: number; label?: string; color?: string }> = [];
+		for (const w of activeWidgets) {
+			if (w.type !== 'timestamp-range') continue;
+			const raw = widgetValues[w.id] ?? '';
+			const [s, e] = raw.split(',').map((v) => parseFloat(v));
+			if (Number.isFinite(s)) out.push({ at: s, label: 'start' });
+			if (Number.isFinite(e)) out.push({ at: e, label: 'end' });
+		}
+		return out;
+	});
+
 	// Tutorial → first phase transition state. On poor internet, the destination
 	// page-load (signed URLs, chunk routing) can stall the navigation. Without
 	// surfacing this, the participant sees nothing happen after "Finish" and
@@ -170,6 +184,7 @@
 				item={sampleItem}
 				config={config.stimuli}
 				src={signedUrls[sampleItem.id] || undefined}
+				markers={scrubberMarkers}
 				bind:mediaElement
 			/>
 		</div>

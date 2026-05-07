@@ -70,7 +70,16 @@
 	<!-- Same `.stimulus-highlight` class as the phase page, defined in
 	     app.css. Single source of truth for the yellow segment-replay ring. -->
 	<div class="rounded-lg" class:stimulus-highlight={highlightActive}>
-		<StimulusRenderer item={stimulusItem} config={stimuliConfig} src={stimulusSrc} bind:mediaElement />
+		<StimulusRenderer
+			item={stimulusItem}
+			config={stimuliConfig}
+			src={stimulusSrc}
+			markers={parsed.timestamps.flatMap((t) => [
+				{ at: t.start, label: 'start' },
+				{ at: t.end, label: 'end' }
+			])}
+			bind:mediaElement
+		/>
 	</div>
 {/if}
 

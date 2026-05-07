@@ -243,6 +243,22 @@
 
 	let mediaElement: HTMLMediaElement | undefined = $state(undefined);
 	let widgetValues = $state<Record<string, string>>({});
+
+	// Visual start/end markers for the video scrubber, derived from any
+	// timestamp-range widget the participant is currently filling in. Reuses
+	// the same `value.split(',')` parsing convention TimestampRangeWidget
+	// emits (see TimestampRangeWidget.svelte) — single source of truth.
+	let scrubberMarkers = $derived.by(() => {
+		const out: Array<{ at: number; label?: string; color?: string }> = [];
+		for (const w of activeWidgets) {
+			if (w.type !== 'timestamp-range') continue;
+			const raw = widgetValues[w.id] ?? '';
+			const [s, e] = raw.split(',').map((v) => parseFloat(v));
+			if (Number.isFinite(s)) out.push({ at: s, label: 'start' });
+			if (Number.isFinite(e)) out.push({ at: e, label: 'end' });
+		}
+		return out;
+	});
 	let audioBlobs = $state<Record<string, Blob>>({});
 	let showGatekeeper = $state(true);
 	let showWidgets = $state(false);
@@ -1142,6 +1158,7 @@
 						item={currentItem as StimulusItemType}
 						config={config.stimuli}
 						src={currentSrc}
+						markers={scrubberMarkers}
 						bind:mediaElement
 					/>
 				</div>

@@ -84,6 +84,9 @@ When writing E2E specs OR briefing an agent to write them:
 | Admin config editor | `src/lib/components/admin/ConfigEditor.svelte` |
 | Response-save service (validation, audio upload, payload assembly) | `src/lib/services/response-save.ts` |
 | Phase-page leaf components | `src/lib/components/participant/{GatekeeperPrompt,BreakModal,BlockProgress}.svelte` |
+| Custom video scrubber (play/pause, slider, time, markers) | `src/lib/components/stimuli/MediaScrubber.svelte` |
+| Replay controller (segment + full-highlight playback) | `src/lib/utils/replay.ts` |
+| Tutorial popover side rules (extracted from TutorialOverlay for testability) | `src/lib/utils/tutorial-placement.ts` |
 | Supabase result helper (`unwrap`, `unwrapVoid`) | `src/lib/server/db.ts` |
 | Toast composable + component | `src/lib/utils/toast.svelte.ts`, `src/lib/components/admin/Toast.svelte` |
 | `use:enhance` helpers (`preserveFields`, `withLoadingFlag`) | `src/lib/utils/enhance.ts` |
@@ -216,6 +219,25 @@ The phrase the user must type to confirm a destructive action ("delete experimen
 
 ### `parseStoredConfig()` defense-in-depth on every config read
 Every code path that returns config to downstream consumers (admin or participant) calls `parseStoredConfig()` first. This catches schema drift on JSONB reads — a config that was valid when saved but no longer parses under the current schema fails loudly rather than silently rendering broken UI. Don't try to "optimize" by skipping this.
+
+### Custom video scrubber owns the controls — don't re-add native `controls`
+The `<video>` in [VideoPlayer.svelte](src/lib/components/stimuli/VideoPlayer.svelte) intentionally has NO `controls` attribute. Participant-facing playback UI is rendered by [MediaScrubber.svelte](src/lib/components/stimuli/MediaScrubber.svelte): play/pause, custom range slider that calls `media.fastSeek(t)` (Chrome/Safari) or `media.currentTime = t` (Firefox) on every input event, time readout, and a marker overlay. Reasons not to revert: Chrome's native scrubber doesn't seek live during drag (the participant's selected frame doesn't follow the thumb until release — fatal for a moment-picking task), and the seek pipeline coalesces requests so fast scrubs don't queue up decoder work the device can't drain. Audio stimuli still use native `<audio controls>` — no scrubber there, audio has no frame-following requirement.
+
+The scrubber accepts a `markers?: ScrubberMarker[]` prop for visual start/end indicators on the timeline. Phase page + tutorial page derive markers from any active timestamp-range widget value (reusing the `value.split(',')` parse convention). [ReviewItemDisplay](src/lib/components/review/ReviewItemDisplay.svelte) derives them from `parsed.timestamps` so the saved range is visible on the slider during review. Don't introduce a second marker parser — keep the parsing inline at the call site to match TimestampRangeWidget's own convention.
+
+### Tutorial popover for `#stimulus-player` has a runtime overlay workaround
+`#stimulus-player` wraps both the (passive) video frame AND the (interactive) scrubber. On narrow viewports Driver.js can't fit the popover beside or below/above the player and falls back to a viewport-centred placement — which lands directly on the scrubber, blocking the participant from operating it. Three layers of mitigation in [TutorialOverlay.svelte](src/lib/components/tutorial/TutorialOverlay.svelte):
+
+1. **Build-time `pickSide` rule** (in [tutorial-placement.ts](src/lib/utils/tutorial-placement.ts)) — converts `bottom` → `top` for `#stimulus-player` targets so we hand Driver.js a placement that doesn't directly conflict with the scrubber.
+2. **Runtime overlay** (`maybeOverlayPopoverOnPlayerTop`, runs in `onHighlighted`) — sniffs Driver.js's `driver-popover-arrow-none` class as a "no clean side fits" signal. When detected, pins the popover to the top of the viewport so it overlays only the (passive) video frame, leaving the scrubber clear.
+3. **CSS readiness gate** — a scoped `:global(.driver-popover:not([data-tutorial-ready='true'])) { opacity: 0 !important }` rule paired with `animate: false` in the driver config. Without these, Driver.js's CSS animation overrides our inline `opacity:0` and the participant briefly sees the popover at the wrong (initial) position before our reposition runs. `onPopoverRender` strips the readiness attribute (Driver.js reuses the popover element across steps); `onHighlighted` re-applies it after our reposition.
+
+This is load-bearing on three Driver.js implementation details: the `arrow-none` class name, callback timing, and `animate: false`. If Driver.js renames any of these, the runtime overlay silently breaks. The defensive E2E spec at [tests/e2e/participant/tutorial-narrow-viewport.spec.ts](tests/e2e/participant/tutorial-narrow-viewport.spec.ts) catches that — it asserts the popover ends up at `y ≤ 32 px` on a 1024×720 viewport with a player inflated to 60vh-equivalent. Don't disable it.
+
+### Tutorial page-load streams `signedUrls` and `firstChunkUrl`
+[+page.server.ts](src/routes/e/[slug]/tutorial/+page.server.ts) returns these as un-awaited promises so the intro modal renders synchronously while signed URL minting + chunk routing settle in the background. On Slow 3G this dropped time-to-modal from ~35 s to ~3 s. The page-svelte resolves the streamed `signedUrls` promise into `$state` via a `$effect`; `handleTutorialComplete` `await`s the streamed `firstChunkUrl` so navigation waits for it if the participant clicks Finish before it resolves. Don't switch back to `await`-on-the-server — that re-introduces the 35 s blank screen.
+
+`signStimuliUrls` accepts an `idFilter` so the tutorial signs only the sample stimulus, not every stimulus in the experiment. Keep this filter on tutorial code paths.
 
 ## Credentials
 

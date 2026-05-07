@@ -3,6 +3,7 @@
 	import { onMount } from 'svelte';
 	import type { TutorialConfigType } from '$lib/config/schema';
 	import { i18n } from '$lib/i18n/index.svelte';
+	import { mapSide, pickSide, PLAYER_SELECTOR } from '$lib/utils/tutorial-placement';
 
 	let {
 		config,
@@ -134,11 +135,40 @@
 		}
 	}
 
-	function mapSide(position: string): 'top' | 'bottom' | 'left' | 'right' {
-		if (['top', 'bottom', 'left', 'right'].includes(position)) {
-			return position as 'top' | 'bottom' | 'left' | 'right';
-		}
-		return 'bottom';
+	// When the player is too tall AND too wide for the popover to fit on any
+	// side, Driver.js falls back to a viewport-centered placement (signalled
+	// by the `driver-popover-arrow-none` class on the arrow element). On the
+	// player that fallback lands overlapping the scrubber. Override: pin the
+	// popover to the top of the viewport so it overlays only the upper slice
+	// of the video frame, leaving the scrubber visible and clickable.
+	function maybeOverlayPopoverOnPlayerTop() {
+		if (typeof window === 'undefined') return;
+		const step = config.steps[currentIndex];
+		if (!step || step.targetSelector !== PLAYER_SELECTOR) return;
+		const popover = document.querySelector('.driver-popover') as HTMLElement | null;
+		const arrow = document.querySelector('.driver-popover-arrow') as HTMLElement | null;
+		const target = document.querySelector(step.targetSelector) as HTMLElement | null;
+		if (!popover || !target) return;
+		// Only override when Driver.js gave up on side placement (its sentinel
+		// for that case). When a clean side does fit, leave Driver.js's
+		// placement alone.
+		if (!arrow?.classList.contains('driver-popover-arrow-none')) return;
+
+		const tr = target.getBoundingClientRect();
+		const pr = popover.getBoundingClientRect();
+		const VIEWPORT_PADDING = 8;
+
+		// Pin to the top of the viewport, centered horizontally on the
+		// player. The scrubber sits at the bottom of the player so this
+		// leaves it clear regardless of how tall the player happens to be.
+		const desiredLeft = tr.left + tr.width / 2 - pr.width / 2;
+		const left = Math.max(VIEWPORT_PADDING, Math.min(desiredLeft, window.innerWidth - pr.width - VIEWPORT_PADDING));
+		popover.style.position = 'fixed';
+		popover.style.left = `${left}px`;
+		popover.style.top = `${VIEWPORT_PADDING}px`;
+		popover.style.right = '';
+		popover.style.bottom = '';
+		popover.style.transform = '';
 	}
 
 	async function beginTutorial() {
@@ -167,7 +197,7 @@
 				popover: {
 					title: i18n.localized(step.title),
 					description,
-					side: mapSide(step.position) as 'top' | 'bottom' | 'left' | 'right',
+					side: pickSide(step.targetSelector, mapSide(step.position)),
 					align: 'center' as const
 				}
 			};
@@ -193,10 +223,37 @@
 			stagePadding: 10,
 			stageRadius: 8,
 			overlayOpacity: 0.5,
+			// Disable Driver.js's 200 ms fade-in animation. The animation runs
+			// from opacity:0 → opacity:1 and overrides our inline opacity:0
+			// while it's playing, which made the popover briefly visible at
+			// Driver.js's pre-reposition placement. With animate:false the
+			// CSS readiness gate (see the style block below) fully controls
+			// visibility.
+			animate: false,
+			onPopoverRender: (popover) => {
+				// Each step transition reuses the same popover element, so
+				// drop the readiness marker — the global CSS rule then hides
+				// the popover until onHighlighted re-applies it after our
+				// reposition. Without this, step 2+ would be visible at
+				// their intermediate placement before our fix runs.
+				popover.wrapper.removeAttribute('data-tutorial-ready');
+			},
 			onHighlighted: () => {
 				// Fires after Driver.js has fully rendered the popover — safe to update the button
 				setupValidation(config.steps[currentIndex]);
 				updateNextButtonState();
+				// When Driver.js can't fit the popover on any side of the target
+				// it falls back to a viewport-centered "no-arrow" placement,
+				// which lands on the bottom of #stimulus-player — i.e. on top of
+				// the (interactive) scrubber. Detect that case and manually
+				// reposition the popover to the top of the viewport (over the
+				// passive video frame, leaving the scrubber visible/clickable).
+				maybeOverlayPopoverOnPlayerTop();
+				// Reveal the popover now that its final position is set. The
+				// CSS rule keyed on this attribute is what actually flips
+				// opacity from 0 → 1 (see the style block below).
+				const popover = document.querySelector('.driver-popover') as HTMLElement | null;
+				if (popover) popover.setAttribute('data-tutorial-ready', 'true');
 			},
 			onNextClick: () => {
 				const stepConfig = config.steps[currentIndex];
@@ -318,6 +375,27 @@
 {/if}
 
 <style>
+	/* Hide the Driver.js popover until our onHighlighted hook has finalised
+	 * its position and tagged the element with data-tutorial-ready. The
+	 * global selector is required because Driver.js injects the popover
+	 * into document.body, outside this component's scoped CSS scope.
+	 *
+	 * The popover sequence is:
+	 *   1. Driver.js inserts the popover into document.body.
+	 *   2. Driver.js positions it (which on narrow viewports may centre it
+	 *      over the scrubber).
+	 *   3. onPopoverRender fires → we strip data-tutorial-ready (rule below
+	 *      makes the popover invisible).
+	 *   4. onHighlighted fires → maybeOverlayPopoverOnPlayerTop runs, then
+	 *      we set data-tutorial-ready="true".
+	 *
+	 * Without this rule, the popover is briefly visible at the wrong
+	 * position before step 4 finishes — the flicker the user reported.
+	 */
+	:global(.driver-popover:not([data-tutorial-ready='true'])) {
+		opacity: 0 !important;
+	}
+
 	.tutorial-overlay {
 		position: fixed;
 		inset: 0;

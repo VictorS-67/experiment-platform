@@ -102,7 +102,10 @@ body {
 	outline: 6px solid rgb(250 204 21 / 0.95);
 	outline-offset: 3px;
 	box-shadow: 0 0 28px rgb(250 204 21 / 0.7);
-	transition: outline-color 75ms ease-out, box-shadow 75ms ease-out;
+	/* No transition — the highlight marks a precise moment, so it must
+	 * appear/disappear instantly. A transition on outline-color caused a
+	 * brief flash in the element's inherited `currentcolor` (typically a
+	 * dim blue-grey) before the rule's yellow took effect. */
 }
 
 /* Spinner animation */

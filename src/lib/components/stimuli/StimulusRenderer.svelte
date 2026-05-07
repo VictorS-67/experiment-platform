@@ -3,17 +3,22 @@
 	import { PUBLIC_SUPABASE_URL } from '$env/static/public';
 	import { i18n } from '$lib/i18n/index.svelte';
 	import VideoPlayer from './VideoPlayer.svelte';
+	import type { ScrubberMarker } from './MediaScrubber.svelte';
 
 	let {
 		item,
 		config,
 		src = undefined,
-		mediaElement = $bindable(undefined)
+		mediaElement = $bindable(undefined),
+		markers = []
 	}: {
 		item: StimulusItemType;
 		config: StimuliConfigType;
 		src?: string;
 		mediaElement?: HTMLMediaElement | undefined;
+		// Visual-only marker overlay on the video scrubber (e.g. saved
+		// start/end timestamps). Ignored for non-video stimuli.
+		markers?: ScrubberMarker[];
 	} = $props();
 
 	let stimulusType = $derived(item.type ?? config.type);
@@ -33,7 +38,7 @@
 </script>
 
 {#if stimulusType === 'video'}
-	<VideoPlayer {item} {config} {src} bind:mediaElement={mediaElement as HTMLVideoElement | undefined} />
+	<VideoPlayer {item} {config} {src} {markers} bind:mediaElement={mediaElement as HTMLVideoElement | undefined} />
 {:else if stimulusType === 'image'}
 	<div class="w-full rounded-lg overflow-hidden" id="stimulus-player">
 		<img src={resolveUrl(item)} alt={i18n.localized(item.label, item.id)} class="w-full" />
