@@ -369,6 +369,11 @@
 	});
 
 	function resetForCurrentItem() {
+		// Drop any active replay listener from the previous stimulus before the
+		// media element re-binds. Without this, a `timeupdate`/`seeking` handler
+		// from the prior stimulus could fire on the new video.
+		if (mediaElement) replayController.cleanup(mediaElement);
+
 		const defaults: Record<string, string> = {};
 		for (const w of activeWidgets) {
 			// Sliders initialize to their min value so position matches logical state

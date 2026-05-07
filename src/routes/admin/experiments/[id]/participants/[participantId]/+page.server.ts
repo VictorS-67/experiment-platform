@@ -1,16 +1,17 @@
 import type { PageServerLoad, Actions } from './$types';
 import { error, fail, isRedirect, redirect } from '@sveltejs/kit';
-import { getExperiment, getParticipantDetail, deleteParticipant, resetParticipantResponses, getParticipantSessionTimings } from '$lib/server/admin';
+import { getParticipantDetail, deleteParticipant, resetParticipantResponses, computeSessionTimings } from '$lib/server/admin';
 import { requireExperimentAccess } from '$lib/server/collaborators';
 import { logAdminAction } from '$lib/server/audit';
 import { signAudioUrls } from '$lib/server/storage';
 import { isAudioPath } from '$lib/utils/response-data';
 
-export const load: PageServerLoad = async ({ params, locals }) => {
+export const load: PageServerLoad = async ({ params, locals, parent }) => {
 	await requireExperimentAccess(locals.adminUser, params.id, 'viewer');
 
-	const experiment = await getExperiment(params.id);
-	if (!experiment) error(404, 'Experiment not found');
+	// `experiment` is already loaded by the layout — re-fetching it here would
+	// pull the full config JSONB a second time per page hit. Pull from parent().
+	const { experiment } = await parent();
 
 	// Pass params.id so getParticipantDetail rejects participants from other
 	// experiments — closes the audit's H3 IDOR.
@@ -18,8 +19,10 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	if (!detail) error(404, 'Participant not found');
 
 	const audioPaths: string[] = [];
+	const flatResponses: Array<{ stimulusId: string; responseData: Record<string, unknown>; createdAt: string }> = [];
 	for (const responses of Object.values(detail.responsesByPhase)) {
 		for (const r of responses) {
+			flatResponses.push({ stimulusId: r.stimulusId, responseData: r.responseData, createdAt: r.createdAt });
 			for (const val of Object.values(r.responseData)) {
 				if (isAudioPath(val)) audioPaths.push(val);
 			}
@@ -29,7 +32,9 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 
 	// Per-chunk session timings (start/end/duration) for payment tracking on
 	// multi-session studies. Empty array when the experiment has no chunking.
-	const sessionTimings = await getParticipantSessionTimings(params.id, params.participantId);
+	// Computed in-process from the responses already fetched above — no extra
+	// `experiments` SELECT and no extra `responses` SELECT.
+	const sessionTimings = computeSessionTimings(experiment.config, flatResponses);
 
 	return { experiment, participant: detail.participant, responsesByPhase: detail.responsesByPhase, signedAudioUrls, sessionTimings };
 };

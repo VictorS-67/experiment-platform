@@ -92,25 +92,17 @@ body {
 	animation: shimmer 1.5s infinite;
 }
 
-/* Stimulus highlight pulse — fires once when navigation jumps to a different
- * stimulus. A 600 ms outline fade replaces the previous always-on `ring-4`
- * which became visually exhausting after ~30 jumps in a session. */
-@keyframes stimulus-pulse {
-	0%   { outline-color: rgb(99 102 241 / 0.8); outline-width: 2px; }
-	100% { outline-color: rgb(99 102 241 / 0); outline-width: 2px; }
-}
-
+/* Sustained yellow highlight ring shown around the video while the player is
+ * inside a replayed [start, end] segment. Stays on for the full duration
+ * (driven by rAF in createReplayController) and is high-contrast against
+ * typical video frames. The previous styling was a 600 ms fade-out pulse,
+ * which is too brief and too low-contrast to communicate "the highlighted
+ * moment is right now." */
 .stimulus-highlight {
-	outline: 2px solid rgb(99 102 241 / 0.8);
-	outline-offset: 2px;
-	animation: stimulus-pulse 600ms ease-out forwards;
-}
-
-@media (prefers-reduced-motion: reduce) {
-	.stimulus-highlight {
-		animation: none;
-		outline: 2px solid rgb(99 102 241 / 0.6);
-	}
+	outline: 6px solid rgb(250 204 21 / 0.95);
+	outline-offset: 3px;
+	box-shadow: 0 0 28px rgb(250 204 21 / 0.7);
+	transition: outline-color 75ms ease-out, box-shadow 75ms ease-out;
 }
 
 /* Spinner animation */

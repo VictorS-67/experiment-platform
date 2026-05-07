@@ -15,49 +15,98 @@ export interface ReplayController {
 }
 
 export function createReplayController(): ReplayController {
-	let activeListener: ((e: Event) => void) | null = null;
+	let activeCleanup: (() => void) | null = null;
 
-	function clearListener(media: HTMLMediaElement) {
-		if (activeListener) {
-			media.removeEventListener('timeupdate', activeListener);
-			activeListener = null;
+	function clearActive() {
+		if (activeCleanup) {
+			activeCleanup();
+			activeCleanup = null;
 		}
 	}
 
 	return {
 		replaySegment(media, start, end) {
-			clearListener(media);
+			clearActive();
 			media.currentTime = start;
 			media.play();
+
+			// `seeking` fires once for the initial currentTime assignment above.
+			// Skip that one event; any subsequent `seeking` event is a user scrub
+			// and means the segment intent is over, so abandon the replay.
+			let initialSeekConsumed = false;
+
 			const onTimeUpdate = () => {
 				if (media.currentTime >= end) {
 					media.pause();
-					clearListener(media);
+					clearActive();
 				}
 			};
-			activeListener = onTimeUpdate;
+			const onSeeking = () => {
+				if (!initialSeekConsumed) { initialSeekConsumed = true; return; }
+				clearActive();
+			};
+
+			activeCleanup = () => {
+				media.removeEventListener('timeupdate', onTimeUpdate);
+				media.removeEventListener('seeking', onSeeking);
+			};
 			media.addEventListener('timeupdate', onTimeUpdate);
+			media.addEventListener('seeking', onSeeking);
 		},
 
 		replayFullWithHighlight(media, start, end, onHighlight) {
-			clearListener(media);
+			clearActive();
 			onHighlight(false);
 			media.currentTime = 0;
 			media.play();
-			const onTimeUpdate = () => {
+
+			let initialSeekConsumed = false;
+			let cancelled = false;
+			let rafId: number | null = null;
+
+			const updateHighlight = () => {
 				const t = media.currentTime;
 				onHighlight(t >= start && t <= end);
+			};
+			// `timeupdate` fires at only ~4 Hz, so driving the ring from it
+			// alone makes a 1-second highlighted range flicker on for ~250 ms
+			// instead of the full duration. rAF gives ~60 Hz updates so the
+			// ring stays visually synced with `currentTime`. `timeupdate` is
+			// still wired up for end-of-playback detection (rAF stops when the
+			// tab is hidden, but `ended` always fires).
+			const tick = () => {
+				if (cancelled) return;
+				updateHighlight();
+				rafId = requestAnimationFrame(tick);
+			};
+			const onTimeUpdate = () => {
+				updateHighlight();
 				if (media.ended) {
 					onHighlight(false);
-					clearListener(media);
+					clearActive();
 				}
 			};
-			activeListener = onTimeUpdate;
+			const onSeeking = () => {
+				if (!initialSeekConsumed) { initialSeekConsumed = true; return; }
+				onHighlight(false);
+				clearActive();
+			};
+
+			activeCleanup = () => {
+				cancelled = true;
+				if (rafId !== null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(rafId);
+				media.removeEventListener('timeupdate', onTimeUpdate);
+				media.removeEventListener('seeking', onSeeking);
+			};
 			media.addEventListener('timeupdate', onTimeUpdate);
+			media.addEventListener('seeking', onSeeking);
+			// rAF is browser-only; in node-based tests this branch is skipped
+			// and the `timeupdate` listener still drives the highlight.
+			if (typeof requestAnimationFrame === 'function') rafId = requestAnimationFrame(tick);
 		},
 
-		cleanup(media) {
-			clearListener(media);
+		cleanup() {
+			clearActive();
 		}
 	};
 }

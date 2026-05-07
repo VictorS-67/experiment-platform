@@ -18,6 +18,18 @@
 	// at mount; later config changes shouldn't reset the user mid-tutorial.
 	let phase = $state<Phase>(config.introduction ? 'intro' : 'welcome');
 
+	// Tracks whether the JS bundle has loaded and the component has mounted.
+	// `false` in SSR HTML so the Continue / Begin Tutorial buttons render in a
+	// disabled "Loading…" state until JS hydrates. Without this, on a slow
+	// connection the participant can read the SSR-rendered intro modal,
+	// click the button before hydration, and see nothing happen — the click
+	// handler doesn't exist yet.
+	let hydrated = $state(false);
+	// True while `beginTutorial()` is awaiting the dynamic `driver.js` import.
+	// Keeps the welcome modal visible with a spinner so the participant has
+	// feedback during the chunk download (~1–4 s on Slow 3G).
+	let starting = $state(false);
+
 	// Driver.js instance and validation state (not reactive — managed imperatively)
 	let driverInstance: ReturnType<typeof import('driver.js').driver> | null = null;
 	let currentIndex = 0;
@@ -130,12 +142,20 @@
 	}
 
 	async function beginTutorial() {
-		phase = 'steps';
+		// Load driver.js BEFORE flipping `phase` so the welcome modal stays
+		// visible (with a spinner via `starting`) during the chunk fetch. The
+		// previous order — flip phase, then await import — left the screen
+		// blank with no feedback for ~1–4 s on Slow 3G.
+		starting = true;
 
-		// Wait for the welcome modal to unmount so the survey UI is visible
-		await new Promise((r) => requestAnimationFrame(r));
-
-		const { driver } = await import('driver.js');
+		let driver: typeof import('driver.js').driver;
+		try {
+			({ driver } = await import('driver.js'));
+		} catch (err) {
+			console.error('Failed to load tutorial runtime:', err);
+			starting = false;
+			return;
+		}
 
 		const steps = config.steps.map((step) => {
 			let description = i18n.localized(step.body);
@@ -155,6 +175,12 @@
 
 		currentIndex = 0;
 		stepValidated = false;
+
+		// Now we have driver.js — flip to steps phase and unmount the welcome
+		// modal, then drive on the next frame so the survey UI is visible.
+		phase = 'steps';
+		starting = false;
+		await new Promise((r) => requestAnimationFrame(r));
 
 		driverInstance = driver({
 			steps,
@@ -207,8 +233,10 @@
 		oncomplete();
 	}
 
-	// Cleanup on unmount
+	// Cleanup on unmount + flip `hydrated` so SSR-rendered "Loading…" buttons
+	// switch to their normal interactive state.
 	onMount(() => {
+		hydrated = true;
 		return () => {
 			cleanupValidation();
 			if (driverInstance) {
@@ -229,10 +257,17 @@
 			<h2 class="text-xl font-semibold mb-3">{i18n.localized(config.introduction.title)}</h2>
 			<p class="text-gray-600 mb-6" style="white-space: pre-line;">{i18n.localized(config.introduction.body)}</p>
 			<button
-				class="w-full bg-indigo-600 text-white py-2 px-4 rounded hover:bg-indigo-700 cursor-pointer font-medium"
+				class="w-full bg-indigo-600 text-white py-2 px-4 rounded hover:bg-indigo-700 cursor-pointer font-medium disabled:bg-indigo-400 disabled:cursor-wait flex items-center justify-center gap-2"
 				onclick={proceedFromIntro}
+				disabled={!hydrated}
+				aria-busy={!hydrated}
 			>
-				{i18n.localized(config.introduction.buttonText ?? {}, i18n.platform('common.continue'))}
+				{#if !hydrated}
+					<span class="spinner w-4 h-4 inline-block"></span>
+					{i18n.platform('common.loading')}
+				{:else}
+					{i18n.localized(config.introduction.buttonText ?? {}, i18n.platform('common.continue'))}
+				{/if}
 			</button>
 		</div>
 	</div>
@@ -243,15 +278,23 @@
 			<p class="text-gray-600 mb-6">{i18n.localized(config.welcome.body)}</p>
 			<div class="flex gap-3">
 				<button
-					class="flex-1 bg-indigo-600 text-white py-2 px-4 rounded hover:bg-indigo-700 cursor-pointer font-medium"
+					class="flex-1 bg-indigo-600 text-white py-2 px-4 rounded hover:bg-indigo-700 cursor-pointer font-medium disabled:bg-indigo-400 disabled:cursor-wait flex items-center justify-center gap-2"
 					onclick={beginTutorial}
+					disabled={!hydrated || starting}
+					aria-busy={!hydrated || starting}
 				>
-					{i18n.localized(config.welcome.buttonText, i18n.platform('tutorial.begin'))}
+					{#if !hydrated || starting}
+						<span class="spinner w-4 h-4 inline-block"></span>
+						{i18n.platform('common.loading')}
+					{:else}
+						{i18n.localized(config.welcome.buttonText, i18n.platform('tutorial.begin'))}
+					{/if}
 				</button>
 			{#if config.allowSkip !== false}
 				<button
-					class="flex-1 bg-gray-200 text-gray-700 py-2 px-4 rounded hover:bg-gray-300 cursor-pointer"
+					class="flex-1 bg-gray-200 text-gray-700 py-2 px-4 rounded hover:bg-gray-300 cursor-pointer disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-wait"
 					onclick={skip}
+					disabled={!hydrated || starting}
 				>
 					{i18n.platform("tutorial.skip")}
 				</button>

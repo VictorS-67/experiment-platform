@@ -37,7 +37,7 @@
 		src={src}
 		class="max-h-[60vh] w-auto h-auto"
 		controls
-		preload="metadata"
+		preload="auto"
 	>
 		<track kind="captions" />
 	</video>

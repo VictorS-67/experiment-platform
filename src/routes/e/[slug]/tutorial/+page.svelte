@@ -11,12 +11,29 @@
 	import TutorialOverlay from '$lib/components/tutorial/TutorialOverlay.svelte';
 	import type { TutorialConfigType } from '$lib/config/schema';
 
+	// `signedUrls` and `firstChunkUrl` are streamed (returned as un-awaited
+	// promises by the page-server load). On slow internet that lets the
+	// tutorial intro modal render immediately while the sample-video URL and
+	// chunk routing settle in the background. Hold the resolved values in
+	// $state and resolve them with $effect.
 	let { data } = $props();
+	let signedUrls = $state<Record<string, string>>({});
+	$effect(() => {
+		const promise = data.signedUrls as Promise<Record<string, string>> | Record<string, string> | undefined;
+		if (!promise) return;
+		Promise.resolve(promise).then((v) => { signedUrls = v ?? {}; });
+	});
 
-	let signedUrls = $derived((data as Record<string, unknown>).signedUrls as Record<string, string> | undefined ?? {});
 	let config = $derived(experiment.config);
 	let slug = $derived($page.params.slug);
-	let tutorial = $derived(config?.tutorial as TutorialConfigType | null);
+	// Read the tutorial config from server data (rendered into SSR HTML),
+	// NOT from the client-only `experiment` store (populated via `$effect`
+	// after hydration). Without this, on Slow 3G the participant stares at an
+	// empty page until the JS bundle finishes downloading, then the modal
+	// suddenly appears post-hydration. With this, the intro modal markup is
+	// in the initial HTML response and shows up as soon as render-blocking
+	// CSS arrives.
+	let tutorial = $derived(data.experiment?.config?.tutorial as TutorialConfigType | null);
 
 	// Use sample stimuli or fall back to first stimulus
 	let sampleItem = $derived.by(() => {
@@ -35,6 +52,16 @@
 	let widgetValues = $state<Record<string, string>>({});
 	let showGatekeeper = $state(false);
 	let showWidgets = $state(false);
+
+	// Tutorial → first phase transition state. On poor internet, the destination
+	// page-load (signed URLs, chunk routing) can stall the navigation. Without
+	// surfacing this, the participant sees nothing happen after "Finish" and
+	// concludes the tutorial is broken (real bug report from testing). The
+	// overlay shows progress; if the navigation takes >10 s or rejects, a Retry
+	// button is shown so they aren't stranded.
+	let navigating = $state(false);
+	let navTimedOut = $state(false);
+	let navTimer: ReturnType<typeof setTimeout> | undefined;
 
 	$effect(() => {
 		// Reset visibility when firstPhase changes
@@ -66,20 +93,35 @@
 		}
 	});
 
-	function handleTutorialComplete() {
+	async function resolveDestination(): Promise<string> {
 		// Server resolves the first-chunk URL respecting per-participant
 		// chunkOrder. For chunked experiments we MUST use that — no
 		// `chunks[0]` fallback (would silently misroute non-zero rotations).
-		// If the server didn't compute one in a chunked experiment (rare —
-		// would indicate a server-side bug), bounce to the landing page so
-		// the login flow re-resolves the destination.
+		// `firstChunkUrl` is streamed; await the promise (will be near-instant
+		// once it has resolved, but blocks if the participant clicks Finish
+		// before the server computed it on a slow connection).
 		const phaseSlug = firstPhase?.slug ?? 'survey';
-		const serverFirst = (data as { firstChunkUrl?: string | null }).firstChunkUrl;
+		const promised = (data as { firstChunkUrl?: Promise<string | null> | string | null }).firstChunkUrl;
+		const serverFirst = await Promise.resolve(promised ?? null);
 		const chunking = config?.stimuli?.chunking;
 		const isChunked = chunking?.enabled && (chunking.chunks?.length ?? 0) > 0;
-		const destination = serverFirst
-			?? (isChunked ? `/e/${slug}` : `/e/${slug}/${phaseSlug}`);
-		goto(destination);
+		return serverFirst ?? (isChunked ? `/e/${slug}` : `/e/${slug}/${phaseSlug}`);
+	}
+
+	async function handleTutorialComplete() {
+		navigating = true;
+		navTimedOut = false;
+		if (navTimer) clearTimeout(navTimer);
+		navTimer = setTimeout(() => { navTimedOut = true; }, 10_000);
+		try {
+			const destination = await resolveDestination();
+			await goto(destination);
+		} catch (err) {
+			console.error('Tutorial → first phase navigation failed:', err);
+			navTimedOut = true;
+		} finally {
+			if (navTimer) { clearTimeout(navTimer); navTimer = undefined; }
+		}
 	}
 
 	async function handleLogout() {
@@ -189,4 +231,33 @@
 <!-- Tutorial overlay on top of everything -->
 {#if tutorial}
 	<TutorialOverlay config={tutorial} oncomplete={handleTutorialComplete} />
+{/if}
+
+<!-- Loading curtain shown while we navigate from the tutorial to the first
+     phase. On poor internet the destination's load (signed URLs + chunk
+     resolution) can take many seconds; without a visible state the participant
+     thought the tutorial was broken. After 10 s we surface a Retry button. -->
+{#if navigating}
+	<div
+		class="fixed inset-0 z-50 bg-black/60 flex flex-col items-center justify-center"
+		role="status"
+		aria-live="polite"
+	>
+		<div class="bg-white rounded-lg p-8 max-w-sm text-center shadow-xl">
+			<div class="spinner w-10 h-10 mx-auto mb-4"></div>
+			<p class="text-gray-800 font-medium">{i18n.platform('common.loading')}</p>
+			{#if navTimedOut}
+				<p class="text-sm text-gray-500 mt-3">
+					This is taking longer than usual.
+				</p>
+				<button
+					type="button"
+					onclick={handleTutorialComplete}
+					class="mt-4 px-6 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors cursor-pointer"
+				>
+					{i18n.platform('common.try_again')}
+				</button>
+			{/if}
+		</div>
+	</div>
 {/if}

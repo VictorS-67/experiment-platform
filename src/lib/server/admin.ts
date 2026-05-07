@@ -321,32 +321,25 @@ export async function getParticipantDetail(participantId: string, experimentId?:
  * timestamps and duration. Used to surface session timing on the admin
  * participant detail page (for payment tracking on multi-session studies).
  *
- * Pure compute over the existing `responses` rows — no schema changes. Each
+ * Pure compute over already-fetched `responses` rows — no DB calls. Each
  * response's chunk membership is resolved by looking up its stimulus_id in
  * the experiment config's `stimuli.chunking.chunks[].blocks[].stimulusIds`.
+ * Caller is expected to pass the responses it already has from
+ * `getParticipantDetail`, avoiding a duplicate `responses` SELECT per page hit.
  */
-export async function getParticipantSessionTimings(
-	experimentId: string,
-	participantId: string
-): Promise<Array<{
+export function computeSessionTimings(
+	config: unknown,
+	responses: ReadonlyArray<{ stimulusId: string; responseData: Record<string, unknown>; createdAt: string }>
+): Array<{
 	chunkSlug: string;
 	chunkLabel?: Record<string, string>;
 	startedAt: string;
 	endedAt: string;
 	durationSeconds: number;
 	responseCount: number;
-}>> {
-	const supabase = getServerSupabase();
-
-	const { data: experiment, error: eErr } = await supabase
-		.from('experiments')
-		.select('config')
-		.eq('id', experimentId)
-		.single();
-	if (eErr || !experiment) return [];
-
+}> {
 	type Chunk = { id: string; slug: string; label?: Record<string, string>; blocks: Array<{ stimulusIds?: string[] }> };
-	const chunks: Chunk[] = (experiment.config as { stimuli?: { chunking?: { chunks?: Chunk[] } } })?.stimuli?.chunking?.chunks ?? [];
+	const chunks: Chunk[] = (config as { stimuli?: { chunking?: { chunks?: Chunk[] } } })?.stimuli?.chunking?.chunks ?? [];
 	if (chunks.length === 0) return [];
 
 	// Map stimulus_id → chunk_slug for non-anchor stimuli (each appears in
@@ -362,27 +355,18 @@ export async function getParticipantSessionTimings(
 		}
 	}
 
-	const { data: responses, error: rErr } = await supabase
-		.from('responses')
-		.select('stimulus_id, response_data, created_at')
-		.eq('participant_id', participantId)
-		.eq('experiment_id', experimentId)
-		.order('created_at', { ascending: true });
-	if (rErr || !responses) return [];
-
 	const byChunk = new Map<string, { startedAt: string; endedAt: string; count: number }>();
 	for (const r of responses) {
-		const rd = r.response_data as Record<string, unknown> | null;
-		const tagged = typeof rd?._chunk === 'string' && validChunkSlugs.has(rd._chunk) ? rd._chunk : null;
-		const slug = tagged ?? stimulusToChunkSlug.get(r.stimulus_id);
+		const tagged = typeof r.responseData?._chunk === 'string' && validChunkSlugs.has(r.responseData._chunk) ? r.responseData._chunk : null;
+		const slug = tagged ?? stimulusToChunkSlug.get(r.stimulusId);
 		if (!slug) continue; // response references a stimulus not in any chunk (e.g. legacy)
 		const existing = byChunk.get(slug);
 		if (existing) {
-			if (r.created_at < existing.startedAt) existing.startedAt = r.created_at;
-			if (r.created_at > existing.endedAt) existing.endedAt = r.created_at;
+			if (r.createdAt < existing.startedAt) existing.startedAt = r.createdAt;
+			if (r.createdAt > existing.endedAt) existing.endedAt = r.createdAt;
 			existing.count++;
 		} else {
-			byChunk.set(slug, { startedAt: r.created_at, endedAt: r.created_at, count: 1 });
+			byChunk.set(slug, { startedAt: r.createdAt, endedAt: r.createdAt, count: 1 });
 		}
 	}
 

@@ -25,9 +25,21 @@ function createMockMedia() {
 			for (const handler of listeners.get('timeupdate') ?? []) {
 				handler();
 			}
+		},
+		// Test helper: simulate a user-initiated seek (e.g. scrub). Mirrors the
+		// browser firing `seeking` whenever currentTime changes — including the
+		// initial controller-assigned seek, which the controller skips once.
+		_simulateSeeking(time: number) {
+			_currentTime = time;
+			for (const handler of listeners.get('seeking') ?? []) {
+				handler();
+			}
 		}
 	};
-	return media as unknown as HTMLMediaElement & { _simulateTimeUpdate: (t: number) => void };
+	return media as unknown as HTMLMediaElement & {
+		_simulateTimeUpdate: (t: number) => void;
+		_simulateSeeking: (t: number) => void;
+	};
 }
 
 describe('createReplayController', () => {
@@ -58,6 +70,22 @@ describe('createReplayController', () => {
 			controller.replaySegment(media, 5.0, 10.0);
 			media._simulateTimeUpdate(10.0);
 			expect(media.removeEventListener).toHaveBeenCalledWith('timeupdate', expect.any(Function));
+		});
+
+		it('cancels segment intent when the user scrubs mid-replay', () => {
+			// Bug 6 (preventive): user clicks Review, sees controller-driven
+			// playback, manually scrubs past `end`, then plays. Without seeking
+			// cancellation, the stale timeupdate listener would call pause() on
+			// the next play. With it, the listener self-clears on the user scrub.
+			controller.replaySegment(media, 5.0, 10.0);
+			// Initial controller seek is consumed silently:
+			media._simulateSeeking(5.0);
+			// User now scrubs past end:
+			media._simulateSeeking(20.0);
+			// Listener must be gone — a subsequent timeupdate must NOT cause pause:
+			(media.pause as ReturnType<typeof vi.fn>).mockClear();
+			media._simulateTimeUpdate(25.0);
+			expect(media.pause).not.toHaveBeenCalled();
 		});
 	});
 

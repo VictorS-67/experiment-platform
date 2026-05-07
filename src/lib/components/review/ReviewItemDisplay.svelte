@@ -67,7 +67,9 @@
 </script>
 
 {#if stimulusItem}
-	<div class="rounded-lg transition-all duration-200" class:ring-4={highlightActive} class:ring-indigo-500={highlightActive}>
+	<!-- Same `.stimulus-highlight` class as the phase page, defined in
+	     app.css. Single source of truth for the yellow segment-replay ring. -->
+	<div class="rounded-lg" class:stimulus-highlight={highlightActive}>
 		<StimulusRenderer item={stimulusItem} config={stimuliConfig} src={stimulusSrc} bind:mediaElement />
 	</div>
 {/if}

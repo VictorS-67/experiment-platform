@@ -172,7 +172,11 @@ async function main() {
 	await insertAll(local, 'participants', participants);
 	await insertAll(local, 'responses', responses);
 	await insertAll(local, 'file_uploads', fileUploads);
-	await insertAll(local, 'pending_invites', pendingInvites);
+	// `invited_by` references auth.users(id) — those UUIDs are remote-only and
+	// don't exist locally, so we null them on insert. The FK is nullable for
+	// exactly this "user no longer exists" case.
+	const localPendingInvites = pendingInvites.map((row) => ({ ...row, invited_by: null }));
+	await insertAll(local, 'pending_invites', localPendingInvites);
 
 	// ── 4. Set up a local admin user ──────────────────────────────────────────
 	console.log('\n👤  Setting up local admin...');
