@@ -389,6 +389,11 @@
 		// media element re-binds. Without this, a `timeupdate`/`seeking` handler
 		// from the prior stimulus could fire on the new video.
 		if (mediaElement) replayController.cleanup(mediaElement);
+		// The replay controller's cleanup removes event listeners but does NOT
+		// reset our local highlight state — if the participant saved while the
+		// yellow ring was still showing (mid-segment of a full-highlight
+		// replay), the ring would persist onto the next video's wrapper.
+		highlightActive = false;
 
 		const defaults: Record<string, string> = {};
 		for (const w of activeWidgets) {

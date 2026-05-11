@@ -65,6 +65,22 @@
 		const onPlay = () => { playing = true; };
 		const onPause = () => { playing = false; };
 		const onEnded = () => { playing = false; };
+		// Stimulus change: the parent reuses the same <video> DOM element and
+		// only swaps `src`, so the `media` prop reference doesn't change and
+		// this $effect's cleanup doesn't run. Without an explicit reset on
+		// `loadstart` (which fires whenever the agent begins loading a new
+		// resource) the scrubber would keep displaying the previous clip's
+		// currentTime / duration — bleeding its progress bar onto the new
+		// video.
+		const onLoadStart = () => {
+			currentTime = 0;
+			duration = 0;
+			playing = false;
+			isDragging = false;
+			pendingSeek = null;
+			seekInFlight = false;
+			if (pendingSeekedCleanup) { pendingSeekedCleanup(); pendingSeekedCleanup = null; }
+		};
 
 		m.addEventListener('loadedmetadata', onLoadedMeta);
 		m.addEventListener('durationchange', onDurationChange);
@@ -72,6 +88,7 @@
 		m.addEventListener('play', onPlay);
 		m.addEventListener('pause', onPause);
 		m.addEventListener('ended', onEnded);
+		m.addEventListener('loadstart', onLoadStart);
 		return () => {
 			m.removeEventListener('loadedmetadata', onLoadedMeta);
 			m.removeEventListener('durationchange', onDurationChange);
@@ -79,6 +96,7 @@
 			m.removeEventListener('play', onPlay);
 			m.removeEventListener('pause', onPause);
 			m.removeEventListener('ended', onEnded);
+			m.removeEventListener('loadstart', onLoadStart);
 			// Drop any in-flight seek listener and reset the seek pipeline so
 			// a delayed `seeked` event from the previous media doesn't trip
 			// flushPendingSeek against the next one.
@@ -105,15 +123,28 @@
 		pendingSeek = null;
 		seekInFlight = true;
 
-		const onSeeked = () => {
+		// Safety net: if `seeked` never fires (codec stall, network drop on
+		// an unbuffered range), the pipeline would lock `seekInFlight = true`
+		// forever and future input events would silently no-op. Force the
+		// pipeline to recover after 1500 ms so the scrubber stays responsive.
+		let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+		const finish = () => {
+			if (timeoutId !== null) { clearTimeout(timeoutId); timeoutId = null; }
 			m.removeEventListener('seeked', onSeeked);
 			pendingSeekedCleanup = null;
 			seekInFlight = false;
-			// If the user kept dragging while this seek was decoding, fire
-			// the next one immediately. Otherwise the pipeline is idle.
+			// If the user kept dragging while this seek was decoding (or
+			// timing out), fire the next one immediately.
 			if (pendingSeek !== null) flushPendingSeek();
 		};
-		pendingSeekedCleanup = () => m.removeEventListener('seeked', onSeeked);
+		const onSeeked = () => finish();
+		timeoutId = setTimeout(finish, 1500);
+
+		pendingSeekedCleanup = () => {
+			if (timeoutId !== null) { clearTimeout(timeoutId); timeoutId = null; }
+			m.removeEventListener('seeked', onSeeked);
+		};
 		m.addEventListener('seeked', onSeeked);
 
 		// fastSeek (Chrome/Safari) decodes to the nearest keyframe — fast
@@ -162,8 +193,21 @@
 	);
 	// Slider position as a unitless percent for the progress-fill calc.
 	// Width math lives in CSS (using --thumb-w) so the thumb size has a
-	// single source of truth — see the style block.
-	const progressPercent = $derived(isReady ? (currentTime / duration) * 100 : 0);
+	// single source of truth — see the style block. Clamped to [0, 100] so
+	// `currentTime` overshooting `duration` briefly (e.g. on `ended` with
+	// float-precision drift) can't push the fill past the track end.
+	const progressPercent = $derived(
+		isReady ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0
+	);
+
+	// Defensive drag recovery. `change` fires on a clean release, but a
+	// pointercancel (system gesture interrupt), drag-then-blur, or context
+	// menu can abort without firing it — leaving `isDragging = true` and
+	// suppressing every subsequent timeupdate-driven slider update until the
+	// user releases somewhere meaningful.
+	function endDrag() {
+		isDragging = false;
+	}
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions —
@@ -242,6 +286,9 @@
 			bind:value={currentTime}
 			oninput={handleInput}
 			onchange={handleChange}
+			onpointerup={endDrag}
+			onpointercancel={endDrag}
+			onblur={endDrag}
 			disabled={!isReady}
 			aria-label="Seek"
 			class="absolute inset-0 w-full h-6 appearance-none bg-transparent cursor-pointer disabled:cursor-not-allowed accent-indigo-500"
@@ -267,8 +314,13 @@
 		/* Style the native range thumb to a clear circle on a thin track. The
 		   visible track is rendered separately above so we keep the input fully
 		   transparent and rely on its hit area for interaction. */
+		/* `box-sizing: border-box` is essential here: the progress-fill calc
+		 * assumes the thumb's visual width equals --thumb-w. Without it the
+		 * 2 px border would extend OUTSIDE the 14 px content box, making the
+		 * thumb 18 px wide and the fill end 2 px before the visual centre. */
 		input[type='range']::-webkit-slider-thumb {
 			appearance: none;
+			box-sizing: border-box;
 			width: var(--thumb-w);
 			height: var(--thumb-w);
 			border-radius: 9999px;
@@ -282,6 +334,7 @@
 			cursor: not-allowed;
 		}
 		input[type='range']::-moz-range-thumb {
+			box-sizing: border-box;
 			width: var(--thumb-w);
 			height: var(--thumb-w);
 			border-radius: 9999px;

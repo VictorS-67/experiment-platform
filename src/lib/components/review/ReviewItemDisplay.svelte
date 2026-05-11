@@ -29,6 +29,18 @@
 	let highlightActive = $state(false);
 	const controller = createReplayController();
 
+	// Reset highlight + drop any in-flight replay listeners when the parent
+	// swaps to a different source response (e.g. participant moves to the
+	// next review item). Without this, saving while the yellow ring is
+	// active leaks the ring onto the next item's wrapper, and the prior
+	// item's timeupdate handler can still drive the highlight on the new
+	// media element.
+	$effect(() => {
+		sourceResponse;
+		highlightActive = false;
+		if (mediaElement) controller.cleanup(mediaElement);
+	});
+
 	// Parse response data into timestamps, audio recordings, and regular key-values
 	let parsed = $derived.by(() => {
 		const data = sourceResponse.response_data;
