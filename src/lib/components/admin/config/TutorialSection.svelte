@@ -16,6 +16,7 @@
 		{ selector: '#save-button', label: 'Save / Continue button' },
 		{ selector: '#start-time-btn', label: 'Timestamp — Start button' },
 		{ selector: '#end-time-btn', label: 'Timestamp — End button' },
+		{ selector: '#review-button', label: 'Timestamp — Review button' },
 	];
 
 	let widgetTutorialTargets = $derived.by(() => {

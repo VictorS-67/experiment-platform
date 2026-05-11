@@ -9,6 +9,7 @@
 	import StimulusRenderer from '$lib/components/stimuli/StimulusRenderer.svelte';
 	import WidgetRenderer from '$lib/components/widgets/WidgetRenderer.svelte';
 	import TutorialOverlay from '$lib/components/tutorial/TutorialOverlay.svelte';
+	import { createReplayController } from '$lib/utils/replay';
 	import type { TutorialConfigType } from '$lib/config/schema';
 
 	// `signedUrls` and `firstChunkUrl` are streamed (returned as un-awaited
@@ -52,6 +53,27 @@
 	let widgetValues = $state<Record<string, string>>({});
 	let showGatekeeper = $state(false);
 	let showWidgets = $state(false);
+
+	// Mirror the phase page's replay support: the timestamp-range widget shows
+	// its inline "Review" button only when `onReplayRequest` is non-null. Both
+	// production experiments have `timestampReviewMode: 'full-highlight'`
+	// configured, so this widget needs the same wiring in the tutorial — otherwise
+	// the participant sees a Review button in the survey that wasn't in the
+	// tutorial. `highlightActive` drives the yellow `.stimulus-highlight` ring
+	// during a full-highlight replay (defined in app.css).
+	let highlightActive = $state(false);
+	const replayController = createReplayController();
+
+	function handleReplayRequest(start: number, end: number, mode: 'segment' | 'full-highlight') {
+		if (!mediaElement) return;
+		if (mode === 'full-highlight') {
+			replayController.replayFullWithHighlight(mediaElement, start, end, (active) => {
+				highlightActive = active;
+			});
+		} else {
+			replayController.replaySegment(mediaElement, start, end);
+		}
+	}
 
 	// Same marker derivation as the phase page so the tutorial's sample
 	// stimulus shows captured start/end positions on the scrubber too.
@@ -180,13 +202,15 @@
 		<ProgressBar current={0} total={config.stimuli.items.length} />
 
 		<div class="mt-4 mb-4">
-			<StimulusRenderer
-				item={sampleItem}
-				config={config.stimuli}
-				src={signedUrls[sampleItem.id] || undefined}
-				markers={scrubberMarkers}
-				bind:mediaElement
-			/>
+			<div class="rounded-lg" class:stimulus-highlight={highlightActive}>
+				<StimulusRenderer
+					item={sampleItem}
+					config={config.stimuli}
+					src={signedUrls[sampleItem.id] || undefined}
+					markers={scrubberMarkers}
+					bind:mediaElement
+				/>
+			</div>
 		</div>
 
 		<!-- Gatekeeper question (if phase has one) -->
@@ -220,12 +244,30 @@
 		{#if showWidgets}
 			<div class="mt-6 space-y-2">
 				{#each activeWidgets as widget (widget.id)}
-					<WidgetRenderer
-						{widget}
-						value={widgetValues[widget.id] ?? ''}
-						{mediaElement}
-						onAudioReady={handleAudioReady}
-					/>
+					<!-- Guard `widgetValues[widget.id] !== undefined` is
+					     load-bearing: Svelte 5 aborts hydration with
+					     `props_invalid_value` if a `bind:value` binds to
+					     `undefined` while the child component has a fallback.
+					     The $effect that populates `widgetValues` from
+					     `activeWidgets` can lag one tick behind a config
+					     hydration — in that window `widgetValues[id]` is still
+					     undefined and the bind would crash the whole page. -->
+					{#if widgetValues[widget.id] !== undefined}
+						<!-- bind:value so widget mutations (e.g. timestamp-range
+						     capture buttons writing `{start},{end}`) round-trip
+						     into widgetValues — needed for the scrubber's
+						     start/end markers. `onReplayRequest` wires the
+						     inline Review button (when `timestampReviewMode` is
+						     configured) so the tutorial behaves the same way as
+						     the real survey. -->
+						<WidgetRenderer
+							{widget}
+							bind:value={widgetValues[widget.id]}
+							{mediaElement}
+							onAudioReady={handleAudioReady}
+							onReplayRequest={handleReplayRequest}
+						/>
+					{/if}
 				{/each}
 
 				<button

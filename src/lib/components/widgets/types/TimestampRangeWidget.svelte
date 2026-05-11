@@ -71,6 +71,7 @@
 	<div class="mt-2 text-center">
 		<button
 			type="button"
+			id="review-button"
 			disabled={!hasRange}
 			onclick={() => { if (hasRange) onReplayRequest(tsStart, tsEnd, widget.config!.timestampReviewMode!); }}
 			class="px-4 py-1.5 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
