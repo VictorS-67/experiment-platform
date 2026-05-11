@@ -31,7 +31,7 @@
 				<FormInput
 					value={value[lang] ?? ''}
 					{multiline}
-					rows={2}
+					rows={5}
 					aria-label={label ? `${label} (${lang})` : lang}
 					oninput={(v) => update(lang, v)}
 				/>

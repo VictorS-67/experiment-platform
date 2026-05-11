@@ -71,12 +71,7 @@
 	<nav class="flex-1 p-2 space-y-0.5">
 		{#each topNav as item}
 			{@const active = isActive(item.href)}
-			{#if item.disabled}
-				<div class="px-3 py-1.5 text-xs text-gray-300 cursor-not-allowed flex items-center justify-between">
-					{item.label}
-					<span class="text-[10px] bg-gray-100 text-gray-400 px-1.5 py-0.5 rounded">Soon</span>
-				</div>
-			{:else}
+			{#if !item.disabled}
 				<a
 					href="{basePath}{item.href}"
 					class="block px-3 py-1.5 rounded text-sm transition-colors {active ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-gray-700 hover:bg-gray-50'}"
